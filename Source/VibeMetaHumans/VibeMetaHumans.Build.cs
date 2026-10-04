@@ -81,7 +81,9 @@ public class VibeMetaHumans : ModuleRules
 				"MetaHumanCaptureData",
 				"MetaHumanPipelineCore",
 				"CaptureDataCore",          // UCaptureData / UFootageCaptureData (CaptureData plugin)
-				"RigLogicModule",           // EDNADataLayer
+				"RigLogicModule",           // EDNADataLayer, DNA readers
+				"InterchangeDNA",           // a skeletal mesh from a DNA (generate_skeletal_mesh_from_dna, 2026-10-04)
+				"MaterialEditor",           // UMaterialEditingLibrary (set_material_texture)
 
 				// MetaHuman Animator (MetaHuman plugin)
 				"MetaHumanCore",

@@ -203,4 +203,73 @@ public:
 	/** Export DNA files (head/body) for the character to a project folder and/or an external directory. */
 	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
 	static FString ExportDna(const FString& CharacterPath, const FString& ProjectPath, const FString& ExternalPath, bool bHead = true, bool bBody = true);
+
+	// =================================================================
+	// Custom mesh to MetaHuman: the Mesh Import tool's "Import > from custom mesh" without the UI (2026-10-04)
+	// =================================================================
+
+	/**
+	 * Conform the MetaHuman body and head to a custom humanoid mesh (a static or skeletal mesh already imported into
+	 * the project): the UI's "Import > from custom mesh > Auto Solve". MeshPath is the combined body+head mesh;
+	 * HeadMeshPath may name a separate head mesh (then MeshPath is the body only). The mesh must stand in the
+	 * MetaHuman frame: feet on z=0, facing +Y, centimetres, A-pose with the arms clear of the body and the fingers
+	 * apart, bald, no lashes. With bTrackFace the head is rendered front-on in a preview scene and the face landmarks
+	 * are tracked (the auto solve needs them); the camera follows the mesh's own facing. Blocking: a 60k-vertex
+	 * mesh takes 1-3 minutes. Afterwards the character holds the solved body in the MESH'S pose: save_posed_dna
+	 * before commit_a_pose.
+	 */
+	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	static FString ImportFromCustomMesh(const FString& CharacterPath, const FString& MeshPath, const FString& HeadMeshPath, bool bAutoSolve = true, bool bTrackFace = true, int32 TrackingImageSize = 1024);
+
+	/**
+	 * The UI's "Manual Solve Actions > Save Pose": the conformed body+head as ONE combined DNA still in the target
+	 * mesh's pose - the baking target for the character's textures. ProjectPath (a content folder) and/or
+	 * ExternalPath (a disk folder); AssetName defaults to <Character>_Posed. MeshPath/HeadMeshPath must be the ones
+	 * import_from_custom_mesh ran with (they key the stored posed state).
+	 */
+	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	static FString SavePosedDna(const FString& CharacterPath, const FString& MeshPath, const FString& HeadMeshPath, const FString& ProjectPath, const FString& ExternalPath, const FString& AssetName);
+
+	/** After the conform: re-evaluate the solved body in the MetaHuman A-pose and refit the face to it (the UI does this when leaving the Import tab). Save the posed DNA first if a bake needs it. */
+	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	static FString CommitAPose(const FString& CharacterPath, const FString& MeshPath, const FString& HeadMeshPath);
+
+	/**
+	 * A skeletal mesh asset from a DNA (a DNA asset path, or a .dna file on disk): the DNA asset's "Generate Skeletal
+	 * Mesh" action, synchronous. Skeleton: "body" (the MetaHuman body skeleton; a posed/combined DNA), "face", "none"
+	 * (a skeleton is generated), or a skeleton asset path.
+	 */
+	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	static FString GenerateSkeletalMeshFromDna(const FString& DnaPath, const FString& PackagePath, const FString& AssetName, const FString& Skeleton = TEXT("body"));
+
+	// =================================================================
+	// Round trips with a DCC (Blender): FBX out, textures and accessories back in
+	// =================================================================
+
+	/**
+	 * Export a static or skeletal mesh asset to an FBX file (centimetres, LOD0, no morph targets, no collision), as
+	 * the Content Browser's Asset Actions > Export does. Empty material slots are filled with the default material
+	 * for the export (an empty slot crashed the exporter, 2026-10-04).
+	 */
+	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	static FString ExportFbx(const FString& AssetPath, const FString& FilePath);
+
+	/**
+	 * Import a PNG/TGA/EXR as a Texture2D. Kind: "color" (sRGB, default compression), "normal" (linear, Normalmap
+	 * compression; bFlipGreen turns an OpenGL +Y map into Unreal's -Y), "mask" (linear, Masks), "linear".
+	 */
+	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	static FString ImportTexture(const FString& FilePath, const FString& PackagePath, const FString& AssetName, const FString& Kind = TEXT("color"), bool bFlipGreen = false);
+
+	/** Set a texture parameter on a material instance constant (a built MetaHuman's MI_Body_Baked "Basecolor Baked", "Normal Baked", MI_Face_Skin_Baked_LOD3 ...) and update it. */
+	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	static FString SetMaterialTexture(const FString& MaterialInstancePath, const FString& ParameterName, const FString& TexturePath);
+
+	/**
+	 * Add a SkeletalMeshComponent to a Blueprint under a parent component (a built MetaHuman's "Body"), set its mesh,
+	 * drive it from the parent's pose (Leader Pose Component) and compile: how an accessory rigged to the MetaHuman
+	 * skeleton (hair, horns, armour) is put on the character.
+	 */
+	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	static FString AttachSkeletalMeshToBlueprint(const FString& BlueprintPath, const FString& ComponentName, const FString& SkeletalMeshPath, const FString& ParentComponentName = TEXT("Body"), bool bLeaderPose = true);
 };

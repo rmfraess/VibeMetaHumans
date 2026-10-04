@@ -2,6 +2,49 @@
 
 #include "Services/UMetaHumanCharacterService.h"
 
+#include "Animation/Skeleton.h"
+#include "AssetExportTask.h"
+#include "AssetImportTask.h"
+#include "AssetToolsModule.h"
+#include "Components/SceneCaptureComponent2D.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "Components/StaticMeshComponent.h"
+#include "DNA.h"
+#include "DNAAssetUserData.h"
+#include "DNACommon.h"
+#include "DNAUtils.h"
+#include "Engine/Blueprint.h"
+#include "Engine/SCS_Node.h"
+#include "Engine/SimpleConstructionScript.h"
+#include "Engine/SkeletalMesh.h"
+#include "Engine/StaticMesh.h"
+#include "Engine/Texture2D.h"
+#include "Engine/TextureRenderTarget2D.h"
+#include "Exporters/Exporter.h"
+#include "Exporters/FbxExportOption.h"
+#include "Exporters/SkeletalMeshExporterFBX.h"
+#include "Exporters/StaticMeshExporterFBX.h"
+#include "Factories/TextureFactory.h"
+#include "HAL/FileManager.h"
+#include "IAssetTools.h"
+#include "ImageUtils.h"
+#include "Misc/FileHelper.h"
+#include "TextureCompiler.h"
+#include "InterchangeDnaModule.h"
+#include "Kismet/KismetRenderingLibrary.h"
+#include "Kismet2/BlueprintEditorUtils.h"
+#include "Kismet2/KismetEditorUtilities.h"
+#include "MaterialDomain.h"
+#include "MaterialEditingLibrary.h"
+#include "Materials/Material.h"
+#include "Materials/MaterialInstanceConstant.h"
+#include "MetaHumanCharacterExportBlueprintLibrary.h"
+#include "MetaHumanCharacterTargetKeyPoints.h"
+#include "MetaHumanConformTargetParams.h"
+#include "PreviewScene.h"
+#include "Rendering/SkeletalMeshModel.h"
+#include "Rendering/SkeletalMeshRenderData.h"
+#include "StaticMeshResources.h"
 #include "Editor.h"
 #include "GameFramework/Actor.h"
 #include "MetaHumanBodyType.h"
@@ -1193,4 +1236,773 @@ FString UMetaHumanCharacterService::ExportDna(const FString& CharacterPath, cons
 	Out->SetStringField(TEXT("project_path"), ProjectPath);
 	Out->SetStringField(TEXT("external_path"), ExternalPath);
 	return CharacterResult(Ctx, Out);
+}
+
+// =====================================================================
+// Custom mesh to MetaHuman (2026-10-04): what the Mesh Import tool does behind "Import > from custom mesh",
+// without its viewport. The recipe is the tool's own (MetaHumanCharacterEditorMeshImportTool.cpp,
+// MetaHumanCharacterEditorMeshTargetContourMechanic.cpp): the target's vertices and triangles through
+// GetMeshDataForConforming, the head framed from the mesh's top 15%, a front-on render whose face landmarks are
+// tracked and stored on the character, then ConformToTargetMeshes with the "combined" pipeline.
+// =====================================================================
+
+namespace
+{
+	/** Load a static or skeletal mesh asset (anything else is an error). */
+	UObject* LoadMeshAsset(const FString& Path, FString& OutError)
+	{
+		UObject* Object = VmhAssets::Load(Path);
+		if (!Object)
+		{
+			OutError = FString::Printf(TEXT("No mesh asset at %s"), *Path);
+			return nullptr;
+		}
+		if (!Object->IsA<UStaticMesh>() && !Object->IsA<USkeletalMesh>())
+		{
+			OutError = FString::Printf(TEXT("%s is a %s, not a static or skeletal mesh"), *Path, *Object->GetClass()->GetName());
+			return nullptr;
+		}
+		return Object;
+	}
+
+	/** The key the character stores the conform's state under: the combined mesh, or body + head. */
+	bool BuildTargetMeshKey(const FString& MeshPath, const FString& HeadMeshPath, FMetaHumanCharacterTargetMeshKey& OutKey, UObject*& OutMesh, UObject*& OutHead, FString& OutError)
+	{
+		OutMesh = LoadMeshAsset(MeshPath, OutError);
+		if (!OutMesh)
+		{
+			return false;
+		}
+		OutHead = nullptr;
+		if (!HeadMeshPath.IsEmpty())
+		{
+			OutHead = LoadMeshAsset(HeadMeshPath, OutError);
+			if (!OutHead)
+			{
+				return false;
+			}
+			OutKey.BodyMesh = OutMesh;
+			OutKey.HeadMesh = OutHead;
+		}
+		else
+		{
+			OutKey.CombinedMesh = OutMesh;
+		}
+		return true;
+	}
+
+	FBox BoundsOf(const TArray<FVector3f>& Vertices)
+	{
+		FBox Box(ForceInit);
+		for (const FVector3f& V : Vertices)
+		{
+			Box += FVector(V);
+		}
+		return Box;
+	}
+
+	/** Which way the mesh faces, read off the feet: the toes stand ahead of the ankles (Master Smith's mh_conform heuristic). */
+	FVector FacingOf(const TArray<FVector3f>& Vertices, const FBox& Bounds)
+	{
+		const double H = Bounds.Max.Z - Bounds.Min.Z;
+		FVector Toes(0), Ankles(0);
+		int32 NToes = 0, NAnkles = 0;
+		for (const FVector3f& V : Vertices)
+		{
+			if (V.Z < Bounds.Min.Z + 0.04 * H) { Toes += FVector(V); ++NToes; }
+			else if (V.Z > Bounds.Min.Z + 0.08 * H && V.Z < Bounds.Min.Z + 0.12 * H) { Ankles += FVector(V); ++NAnkles; }
+		}
+		if (NToes < 10 || NAnkles < 10)
+		{
+			return FVector(0, 1, 0);
+		}
+		FVector F = Toes / NToes - Ankles / NAnkles;
+		F.Z = 0;
+		return F.SizeSquared() > KINDA_SMALL_NUMBER ? F.GetSafeNormal() : FVector(0, 1, 0);
+	}
+
+	/** The tool's head box on a combined mesh: the top 15% of the height, tightened to 60% sideways. */
+	FBox HeadBoundsOf(const FBox& MeshBounds)
+	{
+		const double H = MeshBounds.Max.Z - MeshBounds.Min.Z;
+		FBox Head(FVector(MeshBounds.Min.X, MeshBounds.Min.Y, MeshBounds.Max.Z - H * 0.15), MeshBounds.Max);
+		const FVector C = Head.GetCenter();
+		FVector E = Head.GetExtent();
+		E.X *= 0.6; E.Y *= 0.6;
+		return FBox(C - E, C + E);
+	}
+
+	/**
+	 * Render the target mesh's head front-on in a private preview scene and track the face landmarks, as the tool's
+	 * contour mechanic does with auto framing. Fills the tracking results (camera, image size, curves).
+	 */
+	bool TrackFaceOnMesh(UMetaHumanCharacterEditorSubsystem* Subsystem, UObject* Mesh, const FBox& HeadBounds, const FVector& Facing, int32 ImageSize,
+	                     FMetaHumanCharacterTargetTrackingResults& OutResults, TMap<FString, FTrackingPoints>& OutCurves, TSharedPtr<FJsonObject> Report, FString& OutError)
+	{
+		const FVector HeadCenter = HeadBounds.GetCenter();
+		const float HeadSize = HeadBounds.GetExtent().Size();
+		if (HeadSize <= KINDA_SMALL_NUMBER)
+		{
+			OutError = TEXT("degenerate head bounds");
+			return false;
+		}
+		// the tool's framing: 1.8 head sizes away along the facing, raised a fifth of the head, the head half the frame
+		const float CameraDistance = HeadSize * 1.8f;
+		const FVector CameraPosition = HeadCenter + Facing * CameraDistance + FVector(0, 0, HeadSize * 0.2f);
+		const FRotator CameraRotation = (HeadCenter - CameraPosition).Rotation();
+		const float FOVDegrees = FMath::Clamp(FMath::RadiansToDegrees(2.0f * FMath::Atan(HeadSize / (CameraDistance * 2.f))), 35.0f, 110.0f);
+
+		// what the tracker is given, success or not
+		TSharedPtr<FJsonObject> Track = VmhJson::Obj();
+		Track->SetStringField(TEXT("head_center_cm"), HeadCenter.ToString());
+		Track->SetNumberField(TEXT("head_size_cm"), HeadSize);
+		Track->SetStringField(TEXT("camera_cm"), CameraPosition.ToString());
+		Track->SetStringField(TEXT("camera_rotation"), CameraRotation.ToString());
+		Track->SetNumberField(TEXT("fov_deg"), FOVDegrees);
+		Track->SetNumberField(TEXT("image_size"), ImageSize);
+		if (Report.IsValid())
+		{
+			Report->SetObjectField(TEXT("face_tracking"), Track);
+		}
+
+		// lit from the camera, softly: the default key from above left the face in hard shadow (2026-10-04)
+		FPreviewScene Scene{ FPreviewScene::ConstructionValues().SetSkyBrightness(1.5f).SetLightBrightness(2.5f) };
+		Scene.SetLightDirection(CameraRotation);
+		UMeshComponent* MeshComponent = nullptr;
+		if (UStaticMesh* StaticMesh = Cast<UStaticMesh>(Mesh))
+		{
+			UStaticMeshComponent* C = NewObject<UStaticMeshComponent>(GetTransientPackage(), NAME_None, RF_Transient);
+			C->SetStaticMesh(StaticMesh);
+			MeshComponent = C;
+		}
+		else if (USkeletalMesh* SkeletalMesh = Cast<USkeletalMesh>(Mesh))
+		{
+			USkeletalMeshComponent* C = NewObject<USkeletalMeshComponent>(GetTransientPackage(), NAME_None, RF_Transient);
+			C->SetSkeletalMeshAsset(SkeletalMesh);
+			MeshComponent = C;
+		}
+		if (!MeshComponent)
+		{
+			OutError = TEXT("not a mesh");
+			return false;
+		}
+		Scene.AddComponent(MeshComponent, FTransform::Identity);
+		for (int32 i = 0; i < MeshComponent->GetNumMaterials(); ++i)
+		{
+			if (!MeshComponent->GetMaterial(i))
+			{
+				MeshComponent->SetMaterial(i, UMaterial::GetDefaultMaterial(MD_Surface));
+			}
+		}
+
+		UTextureRenderTarget2D* RenderTarget = NewObject<UTextureRenderTarget2D>(GetTransientPackage(), NAME_None, RF_Transient);
+		RenderTarget->RenderTargetFormat = RTF_RGBA8;
+		RenderTarget->InitAutoFormat(ImageSize, ImageSize);
+		RenderTarget->UpdateResourceImmediate(false);
+		USceneCaptureComponent2D* Capture = NewObject<USceneCaptureComponent2D>(GetTransientPackage(), NAME_None, RF_Transient);
+		Capture->TextureTarget = RenderTarget;
+		Capture->CaptureSource = ESceneCaptureSource::SCS_FinalToneCurveHDR;
+		Capture->bCaptureEveryFrame = false;
+		Capture->bCaptureOnMovement = false;
+		Capture->bAlwaysPersistRenderingState = true;
+		Capture->ProjectionType = ECameraProjectionMode::Perspective;
+		Capture->FOVAngle = FOVDegrees;
+		Scene.AddComponent(Capture, FTransform(CameraRotation, CameraPosition));
+		Capture->CaptureScene();
+
+		TArray<FColor> Pixels;
+		if (!UKismetRenderingLibrary::ReadRenderTarget(Capture, RenderTarget, Pixels) || Pixels.Num() != ImageSize * ImageSize)
+		{
+			OutError = TEXT("could not read the face render");
+			return false;
+		}
+		// the render on disk, success or not: the agent reads it when the tracker finds no face
+		const FString DumpPath = FPaths::ProjectSavedDir() / TEXT("VibeMetaHumans") / FString::Printf(TEXT("FaceTrack_%s.png"), *Mesh->GetName());
+		{
+			TArray64<uint8> Png;
+			FImageUtils::PNGCompressImageArray(ImageSize, ImageSize, Pixels, Png);
+			IFileManager::Get().MakeDirectory(*FPaths::GetPath(DumpPath), true);
+			FFileHelper::SaveArrayToFile(Png, *DumpPath);
+			Track->SetStringField(TEXT("render"), DumpPath);
+			if (Report.IsValid())
+			{
+				Report->SetStringField(TEXT("face_render"), DumpPath);
+			}
+		}
+		if (!Subsystem->TrackFaceLandmarksFromImage(Pixels, ImageSize, ImageSize, OutCurves) || OutCurves.IsEmpty())
+		{
+			OutError = FString::Printf(TEXT("the face landmark tracker found no face in the front-on render %s (is the head bald and facing +Y, the mesh in centimetres with its feet on z=0?)"), *DumpPath);
+			return false;
+		}
+
+		FMinimalViewInfo ViewInfo;
+		Capture->GetCameraView(0.0f, ViewInfo);
+		ViewInfo.AspectRatio = 1.0f;
+		OutResults.CameraViewInfo = ViewInfo;
+		OutResults.ImageSize = FIntPoint(ImageSize, ImageSize);
+		OutResults.CurveTrackingPoints.Reset();
+		int32 PointCount = 0;
+		for (const TPair<FString, FTrackingPoints>& Pair : OutCurves)
+		{
+			FMetaHumanCharacterCurveTrackingPoints Curve;
+			Curve.Points = Pair.Value.TrackingPoints;
+			PointCount += Curve.Points.Num();
+			OutResults.CurveTrackingPoints.Add(Pair.Key, Curve);
+		}
+		Track->SetNumberField(TEXT("curves"), OutCurves.Num());
+		Track->SetNumberField(TEXT("points"), PointCount);
+		return true;
+	}
+}
+
+FString UMetaHumanCharacterService::ImportFromCustomMesh(const FString& CharacterPath, const FString& MeshPath, const FString& HeadMeshPath, bool bAutoSolve, bool bTrackFace, int32 TrackingImageSize)
+{
+	FMetaHumanCharacterTargetMeshKey Key;
+	UObject* Mesh = nullptr;
+	UObject* Head = nullptr;
+	FString Error;
+	if (!BuildTargetMeshKey(MeshPath, HeadMeshPath, Key, Mesh, Head, Error))
+	{
+		return VmhJson::Error(TEXT("MESH_NOT_FOUND"), Error);
+	}
+	FEditContext Ctx = OpenForEdit(CharacterPath, true);
+	if (!Ctx.IsValid())
+	{
+		return Ctx.ToError();
+	}
+
+	FConformTargetMesh Target;
+	if (!UMetaHumanCharacterEditorSubsystem::GetMeshDataForConforming(Mesh, Target.BodyVertices, Target.BodyVertexIndices) || Target.BodyVertices.IsEmpty())
+	{
+		return VmhJson::Error(TEXT("MESH_DATA_FAILED"), FString::Printf(TEXT("GetMeshDataForConforming gave no vertices for %s"), *MeshPath));
+	}
+	Target.TargetPartsType = ETargetPartsType::Combined;
+	if (Head)
+	{
+		if (!UMetaHumanCharacterEditorSubsystem::GetMeshDataForConforming(Head, Target.HeadVertices, Target.HeadVertexIndices) || Target.HeadVertices.IsEmpty())
+		{
+			return VmhJson::Error(TEXT("MESH_DATA_FAILED"), FString::Printf(TEXT("GetMeshDataForConforming gave no vertices for %s"), *HeadMeshPath));
+		}
+		Target.TargetPartsType = ETargetPartsType::HeadAndBody;
+	}
+
+	const FBox MeshBounds = BoundsOf(Target.BodyVertices);
+	const FVector Facing = FacingOf(Target.BodyVertices, MeshBounds);
+	const FBox HeadBounds = Head ? BoundsOf(Target.HeadVertices) : HeadBoundsOf(MeshBounds);
+
+	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
+	Out->SetStringField(TEXT("mesh"), Mesh->GetPathName());
+	Out->SetStringField(TEXT("parts"), Head ? TEXT("HeadAndBody") : TEXT("Combined"));
+	Out->SetNumberField(TEXT("vertices"), Target.BodyVertices.Num() + Target.HeadVertices.Num());
+	Out->SetNumberField(TEXT("triangles"), (Target.BodyVertexIndices.Num() + Target.HeadVertexIndices.Num()) / 3);
+	Out->SetNumberField(TEXT("height_cm"), MeshBounds.Max.Z - MeshBounds.Min.Z);
+	Out->SetNumberField(TEXT("feet_z_cm"), MeshBounds.Min.Z);
+	Out->SetStringField(TEXT("facing"), Facing.ToString());
+	TArray<FString> Warnings;
+	if (FMath::Abs(MeshBounds.Min.Z) > 5.0)
+	{
+		Warnings.Add(FString::Printf(TEXT("the feet stand at z=%.1f cm, not on the floor"), MeshBounds.Min.Z));
+	}
+	const double HeightCm = MeshBounds.Max.Z - MeshBounds.Min.Z;
+	if (HeightCm < 100 || HeightCm > 260)
+	{
+		Warnings.Add(FString::Printf(TEXT("the mesh is %.0f cm tall: not a human in centimetres (a metre-unit import?)"), HeightCm));
+	}
+	if (FVector::DotProduct(Facing, FVector(0, 1, 0)) < 0.94)
+	{
+		Warnings.Add(FString::Printf(TEXT("the mesh faces %s; MetaHumans face +Y - re-import it turned, or expect a rough solve"), *Facing.ToString()));
+	}
+
+	FConformTargetParams Params;
+	Params.ConformTargetMesh = Target;
+	Params.bEstimateBodyJointsFromMesh = false;
+	Params.bAutoSolve = bAutoSolve;
+	if (bAutoSolve && Params.BodyConformSolveSettings.PipelineName.IsEmpty())
+	{
+		Params.BodyConformSolveSettings.PipelineName = Head ? TEXT("head_body") : TEXT("combined");
+	}
+	if (bTrackFace)
+	{
+		FMetaHumanCharacterTargetTrackingResults Tracking;
+		TMap<FString, FTrackingPoints> Curves;
+		FString TrackError;
+		if (TrackFaceOnMesh(Ctx.Subsystem, Head ? Head : Mesh, HeadBounds, Facing, FMath::Clamp(TrackingImageSize, 256, 4096), Tracking, Curves, Out, TrackError))
+		{
+			Ctx.Subsystem->CommitTargetMeshTrackingResults(Ctx.Character, Key, Tracking);
+			Params.CurveTrackingPoints = Curves;
+			Params.CameraViewInfo = Tracking.CameraViewInfo;
+			Params.ImageSize = Tracking.ImageSize;
+		}
+		else
+		{
+			Warnings.Add(FString::Printf(TEXT("face tracking failed (%s): the solve runs on the body alone and the face stays the archetype's"), *TrackError));
+		}
+	}
+	Out->SetArrayField(TEXT("warnings"), VmhJson::StringArray(Warnings));
+
+	const double Started = FPlatformTime::Seconds();
+	const bool bSolved = Ctx.Subsystem->ConformToTargetMeshes(Ctx.Character, Key, Params);
+	Out->SetBoolField(TEXT("solved"), bSolved);
+	Out->SetNumberField(TEXT("seconds"), FPlatformTime::Seconds() - Started);
+	if (!bSolved)
+	{
+		Out->SetStringField(TEXT("character"), Ctx.Character->GetPathName());
+		return VmhJson::Error(TEXT("CONFORM_FAILED"), TEXT("ConformToTargetMeshes returned false (see the Output Log; a mesh in metres, lying down, or without a head is the usual cause)"), Out);
+	}
+	Out->SetStringField(TEXT("next"), TEXT("save_posed_dna (the baking target, in this pose) then commit_a_pose, request_auto_rig, request_texture_sources, build"));
+	return CharacterResult(Ctx, Out);
+}
+
+FString UMetaHumanCharacterService::SavePosedDna(const FString& CharacterPath, const FString& MeshPath, const FString& HeadMeshPath, const FString& ProjectPath, const FString& ExternalPath, const FString& AssetName)
+{
+	if (ProjectPath.IsEmpty() && ExternalPath.IsEmpty())
+	{
+		return VmhJson::Error(TEXT("NO_DESTINATION"), TEXT("give ProjectPath (a content folder) and/or ExternalPath (a disk folder)"));
+	}
+	FMetaHumanCharacterTargetMeshKey Key;
+	UObject* Mesh = nullptr;
+	UObject* Head = nullptr;
+	FString Error;
+	if (!BuildTargetMeshKey(MeshPath, HeadMeshPath, Key, Mesh, Head, Error))
+	{
+		return VmhJson::Error(TEXT("MESH_NOT_FOUND"), Error);
+	}
+	FEditContext Ctx = OpenForEdit(CharacterPath, true);
+	if (!Ctx.IsValid())
+	{
+		return Ctx.ToError();
+	}
+	if (!ExternalPath.IsEmpty())
+	{
+		IFileManager::Get().MakeDirectory(*ExternalPath, true);
+	}
+	FMetaHumanPosedDNAExportParams Params;
+	Params.ProjectPath = ProjectPath;
+	Params.ExternalPath = ExternalPath;
+	Params.TargetMeshKey = Key;
+	Params.AssetName = AssetName;
+	Params.bOverwriteExistingAssets = true;
+	UMetaHumanCharacterExportBlueprintLibrary::ExportPosedDNA(Ctx.Character, Params);
+
+	const FString Name = AssetName.IsEmpty() ? Ctx.Character->GetName() + TEXT("_Posed") : AssetName;
+	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
+	if (!ProjectPath.IsEmpty())
+	{
+		const FString AssetPath = ProjectPath / Name;
+		Out->SetStringField(TEXT("dna_asset"), AssetPath);
+		Out->SetBoolField(TEXT("dna_asset_exists"), VmhAssets::Load(AssetPath) != nullptr);
+	}
+	if (!ExternalPath.IsEmpty())
+	{
+		const FString File = ExternalPath / Name + TEXT(".dna");
+		Out->SetStringField(TEXT("dna_file"), File);
+		Out->SetBoolField(TEXT("dna_file_exists"), FPaths::FileExists(File));
+		Out->SetNumberField(TEXT("dna_file_bytes"), FPaths::FileExists(File) ? static_cast<double>(IFileManager::Get().FileSize(*File)) : 0.0);
+	}
+	Out->SetStringField(TEXT("hint"), TEXT("nothing written means no posed state was stored for this mesh key: run import_from_custom_mesh with the same MeshPath first"));
+	return CharacterResult(Ctx, Out);
+}
+
+FString UMetaHumanCharacterService::CommitAPose(const FString& CharacterPath, const FString& MeshPath, const FString& HeadMeshPath)
+{
+	FMetaHumanCharacterTargetMeshKey Key;
+	UObject* Mesh = nullptr;
+	UObject* Head = nullptr;
+	FString Error;
+	if (!BuildTargetMeshKey(MeshPath, HeadMeshPath, Key, Mesh, Head, Error))
+	{
+		return VmhJson::Error(TEXT("MESH_NOT_FOUND"), Error);
+	}
+	FEditContext Ctx = OpenForEdit(CharacterPath, true);
+	if (!Ctx.IsValid())
+	{
+		return Ctx.ToError();
+	}
+	Ctx.Subsystem->CommitPosedStateAsAPose(Ctx.Character, Key);
+	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
+	Out->SetStringField(TEXT("state"), TEXT("the body and face states are now in the MetaHuman A-pose; a bake against the target mesh no longer lines up (use the posed DNA)"));
+	return CharacterResult(Ctx, Out);
+}
+
+FString UMetaHumanCharacterService::GenerateSkeletalMeshFromDna(const FString& DnaPath, const FString& PackagePath, const FString& AssetName, const FString& Skeleton)
+{
+	if (PackagePath.IsEmpty() || AssetName.IsEmpty())
+	{
+		return VmhJson::Error(TEXT("BAD_ARGS"), TEXT("PackagePath and AssetName are required"));
+	}
+	TSharedPtr<IDNAReader> Reader;
+	UDNA* DnaAsset = nullptr;
+	FDNAConfig Config = FDNAConfig::Legacy(ECoordinateSystemTransformPolicy::Transform);
+	if (DnaPath.EndsWith(TEXT(".dna"), ESearchCase::IgnoreCase) || DnaPath.EndsWith(TEXT(".mhdna"), ESearchCase::IgnoreCase))
+	{
+		if (!FPaths::FileExists(DnaPath))
+		{
+			return VmhJson::Error(TEXT("DNA_NOT_FOUND"), FString::Printf(TEXT("No file at %s"), *DnaPath));
+		}
+		Reader = ReadDNAFromFile(DnaPath, EDNADataLayer::All);
+	}
+	else
+	{
+		DnaAsset = VmhAssets::Load<UDNA>(DnaPath);
+		if (!DnaAsset)
+		{
+			return VmhJson::Error(TEXT("DNA_NOT_FOUND"), FString::Printf(TEXT("No DNA asset at %s"), *DnaPath));
+		}
+		Reader = DnaAsset->GetDNAReader();
+		Config = DnaAsset->DNAConfig;
+	}
+	if (!Reader.IsValid())
+	{
+		return VmhJson::Error(TEXT("DNA_UNREADABLE"), FString::Printf(TEXT("Could not read the DNA at %s"), *DnaPath));
+	}
+	USkeleton* SkeletonAsset = nullptr;
+	const FString Kind = Skeleton.ToLower();
+	if (Kind == TEXT("body"))
+	{
+		SkeletonAsset = LoadObject<USkeleton>(nullptr, TEXT("/MetaHumanCharacter/Female/Medium/NormalWeight/Body/metahuman_base_skel.metahuman_base_skel"));
+	}
+	else if (Kind == TEXT("face"))
+	{
+		SkeletonAsset = LoadObject<USkeleton>(nullptr, TEXT("/MetaHumanCharacter/Face/Face_Archetype_Skeleton.Face_Archetype_Skeleton"));
+	}
+	else if (!Kind.IsEmpty() && Kind != TEXT("none"))
+	{
+		SkeletonAsset = VmhAssets::Load<USkeleton>(Skeleton);
+		if (!SkeletonAsset)
+		{
+			return VmhJson::Error(TEXT("SKELETON_NOT_FOUND"), FString::Printf(TEXT("No skeleton at %s (use body, face, none or a path)"), *Skeleton));
+		}
+	}
+	USkeletalMesh* SkeletalMesh = FInterchangeDnaModule::GetModule().ImportSync(AssetName, PackagePath, Reader, SkeletonAsset, Config);
+	if (!SkeletalMesh)
+	{
+		return VmhJson::Error(TEXT("GENERATE_FAILED"), TEXT("the DNA interchange import made no skeletal mesh (see the Output Log)"));
+	}
+	if (DnaAsset)
+	{
+		UDNAAssetUserData* UserData = NewObject<UDNAAssetUserData>(SkeletalMesh);
+		UserData->DNAAsset = DnaAsset;
+		SkeletalMesh->AddAssetUserData(UserData);
+	}
+	else
+	{
+		FInterchangeDnaModule::GetModule().CreateAndAttachDNAToSkeletalMesh(SkeletalMesh, Reader);
+	}
+	SkeletalMesh->MarkPackageDirty();
+
+	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
+	Out->SetStringField(TEXT("skeletal_mesh"), SkeletalMesh->GetPathName());
+	Out->SetStringField(TEXT("skeleton"), SkeletalMesh->GetSkeleton() ? SkeletalMesh->GetSkeleton()->GetPathName() : TEXT(""));
+	Out->SetNumberField(TEXT("bones"), SkeletalMesh->GetRefSkeleton().GetNum());
+	const FBoxSphereBounds Bounds = SkeletalMesh->GetBounds();
+	Out->SetStringField(TEXT("bounds_extent_cm"), Bounds.BoxExtent.ToString());
+	Out->SetStringField(TEXT("bounds_origin_cm"), Bounds.Origin.ToString());
+	if (SkeletalMesh->GetImportedModel() && SkeletalMesh->GetImportedModel()->LODModels.Num() > 0)
+	{
+		Out->SetNumberField(TEXT("lod0_vertices"), SkeletalMesh->GetImportedModel()->LODModels[0].NumVertices);
+	}
+	Out->SetStringField(TEXT("next"), TEXT("export_fbx it for a bake against the target mesh; save the package when it should stay"));
+	return VmhJson::Ok(Out);
+}
+
+// =====================================================================
+// Round trips with a DCC
+// =====================================================================
+
+FString UMetaHumanCharacterService::ExportFbx(const FString& AssetPath, const FString& FilePath)
+{
+	FString Error;
+	UObject* Asset = LoadMeshAsset(AssetPath, Error);
+	if (!Asset)
+	{
+		return VmhJson::Error(TEXT("MESH_NOT_FOUND"), Error);
+	}
+	if (FilePath.IsEmpty() || !FilePath.EndsWith(TEXT(".fbx"), ESearchCase::IgnoreCase))
+	{
+		return VmhJson::Error(TEXT("BAD_PATH"), TEXT("FilePath must end in .fbx"));
+	}
+	IFileManager::Get().MakeDirectory(*FPaths::GetPath(FilePath), true);
+
+	// an empty material slot took the exporter down with an array assertion (2026-10-04): fill them for the export
+	TArray<int32> Filled;
+	UMaterialInterface* Default = UMaterial::GetDefaultMaterial(MD_Surface);
+	if (USkeletalMesh* SkeletalMesh = Cast<USkeletalMesh>(Asset))
+	{
+		TArray<FSkeletalMaterial>& Materials = SkeletalMesh->GetMaterials();
+		for (int32 i = 0; i < Materials.Num(); ++i)
+		{
+			if (!Materials[i].MaterialInterface)
+			{
+				Materials[i].MaterialInterface = Default;
+				Filled.Add(i);
+			}
+		}
+		if (!SkeletalMesh->GetResourceForRendering() || SkeletalMesh->GetResourceForRendering()->LODRenderData.IsEmpty())
+		{
+			return VmhJson::Error(TEXT("NO_RENDER_DATA"), TEXT("the skeletal mesh has no LOD render data to export"));
+		}
+		// a section pointing past the material slots takes the exporter down with an array assertion even after the
+		// slots are filled (the optional content's archetype_SkelMesh, 2026-10-04): refuse instead of crashing
+		for (const FSkelMeshRenderSection& Section : SkeletalMesh->GetResourceForRendering()->LODRenderData[0].RenderSections)
+		{
+			if (Section.MaterialIndex < 0 || Section.MaterialIndex >= Materials.Num())
+			{
+				for (int32 i : Filled) { Materials[i].MaterialInterface = nullptr; }
+				return VmhJson::Error(TEXT("BAD_MATERIAL_INDEX"), FString::Printf(TEXT("LOD0 section uses material index %d but the mesh has %d material slots; the FBX exporter would assert. Duplicate the mesh and fix its materials first"), Section.MaterialIndex, Materials.Num()));
+			}
+		}
+		if (SkeletalMesh->GetLODNum() != SkeletalMesh->GetLODInfoArray().Num())
+		{
+			for (int32 i : Filled) { Materials[i].MaterialInterface = nullptr; }
+			return VmhJson::Error(TEXT("BAD_LOD_INFO"), FString::Printf(TEXT("%d LODs but %d LOD info entries; the FBX exporter would assert"), SkeletalMesh->GetLODNum(), SkeletalMesh->GetLODInfoArray().Num()));
+		}
+	}
+	else if (UStaticMesh* StaticMesh = Cast<UStaticMesh>(Asset))
+	{
+		TArray<FStaticMaterial>& Materials = StaticMesh->GetStaticMaterials();
+		for (int32 i = 0; i < Materials.Num(); ++i)
+		{
+			if (!Materials[i].MaterialInterface)
+			{
+				Materials[i].MaterialInterface = Default;
+				Filled.Add(i);
+			}
+		}
+		if (!StaticMesh->GetRenderData() || StaticMesh->GetRenderData()->LODResources.IsEmpty())
+		{
+			return VmhJson::Error(TEXT("NO_RENDER_DATA"), TEXT("the static mesh has no LOD render data to export"));
+		}
+	}
+
+	UAssetExportTask* Task = NewObject<UAssetExportTask>();
+	Task->Object = Asset;
+	Task->Filename = FilePath;
+	Task->bAutomated = true;
+	Task->bReplaceIdentical = true;
+	Task->bPrompt = false;
+	Task->bSelected = false;
+	Task->bUseFileArchive = false;
+	Task->bWriteEmptyFiles = false;
+	Task->Exporter = Asset->IsA<USkeletalMesh>() ? static_cast<UExporter*>(NewObject<USkeletalMeshExporterFBX>()) : static_cast<UExporter*>(NewObject<UStaticMeshExporterFBX>());
+	UFbxExportOption* Options = NewObject<UFbxExportOption>();
+	Options->bASCII = false;
+	Options->LevelOfDetail = false;
+	Options->Collision = false;
+	Options->VertexColor = false;
+	Options->bExportMorphTargets = false;
+	Options->bExportPreviewMesh = false;
+	Options->bForceFrontXAxis = false;
+	Options->MapSkeletalMotionToRoot = false;
+	Task->Options = Options;
+	const bool bOk = UExporter::RunAssetExportTask(Task);
+
+	// put the empty slots back
+	if (USkeletalMesh* SkeletalMesh = Cast<USkeletalMesh>(Asset))
+	{
+		for (int32 i : Filled) { SkeletalMesh->GetMaterials()[i].MaterialInterface = nullptr; }
+	}
+	else if (UStaticMesh* StaticMesh = Cast<UStaticMesh>(Asset))
+	{
+		for (int32 i : Filled) { StaticMesh->GetStaticMaterials()[i].MaterialInterface = nullptr; }
+	}
+
+	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
+	Out->SetStringField(TEXT("asset"), Asset->GetPathName());
+	Out->SetStringField(TEXT("file"), FilePath);
+	Out->SetBoolField(TEXT("exists"), FPaths::FileExists(FilePath));
+	Out->SetNumberField(TEXT("bytes"), FPaths::FileExists(FilePath) ? static_cast<double>(IFileManager::Get().FileSize(*FilePath)) : 0.0);
+	Out->SetNumberField(TEXT("empty_slots_filled"), Filled.Num());
+	Out->SetArrayField(TEXT("errors"), VmhJson::StringArray(Task->Errors));
+	Out->SetStringField(TEXT("units"), TEXT("centimetres; Blender's FBX importer reads it in metres with the scale on the root"));
+	if (!bOk || !FPaths::FileExists(FilePath))
+	{
+		return VmhJson::Error(TEXT("EXPORT_FAILED"), TEXT("the FBX exporter wrote nothing (see errors and the Output Log)"), Out);
+	}
+	return VmhJson::Ok(Out);
+}
+
+FString UMetaHumanCharacterService::ImportTexture(const FString& FilePath, const FString& PackagePath, const FString& AssetName, const FString& Kind, bool bFlipGreen)
+{
+	if (!FPaths::FileExists(FilePath))
+	{
+		return VmhJson::Error(TEXT("FILE_NOT_FOUND"), FString::Printf(TEXT("No file at %s"), *FilePath));
+	}
+	if (PackagePath.IsEmpty() || AssetName.IsEmpty())
+	{
+		return VmhJson::Error(TEXT("BAD_ARGS"), TEXT("PackagePath and AssetName are required"));
+	}
+	const FString K = Kind.ToLower();
+	const bool bNormal = K == TEXT("normal");
+	const bool bColor = K.IsEmpty() || K == TEXT("color") || K == TEXT("colour") || K == TEXT("basecolor");
+	const bool bMask = K == TEXT("mask") || K == TEXT("masks");
+
+	UTextureFactory* Factory = NewObject<UTextureFactory>();
+	UTextureFactory::SuppressImportOverwriteDialog();
+	Factory->bFlipNormalMapGreenChannel = bNormal && bFlipGreen;
+	Factory->CompressionSettings = bNormal ? TC_Normalmap : bMask ? TC_Masks : TC_Default;
+	Factory->LODGroup = bNormal ? TEXTUREGROUP_WorldNormalMap : TEXTUREGROUP_World;
+	UAssetImportTask* Task = NewObject<UAssetImportTask>();
+	Task->Filename = FilePath;
+	Task->DestinationPath = PackagePath;
+	Task->DestinationName = AssetName;
+	Task->bAutomated = true;
+	Task->bReplaceExisting = true;
+	Task->bSave = false;
+	Task->Factory = Factory;
+	FAssetToolsModule::GetModule().Get().ImportAssetTasks({ Task });
+
+	UTexture2D* Texture = nullptr;
+	for (UObject* Object : Task->GetObjects())
+	{
+		Texture = Cast<UTexture2D>(Object);
+		if (Texture) break;
+	}
+	if (!Texture)
+	{
+		Texture = VmhAssets::Load<UTexture2D>(PackagePath / AssetName);
+	}
+	if (!Texture)
+	{
+		return VmhJson::Error(TEXT("IMPORT_FAILED"), FString::Printf(TEXT("no Texture2D came out of %s (see the Output Log)"), *FilePath));
+	}
+	Texture->PreEditChange(nullptr);
+	Texture->SRGB = bColor;
+	Texture->CompressionSettings = bNormal ? TC_Normalmap : bMask ? TC_Masks : TC_Default;
+	Texture->LODGroup = bNormal ? TEXTUREGROUP_WorldNormalMap : TEXTUREGROUP_World;
+	if (bNormal && bFlipGreen && !Factory->bFlipNormalMapGreenChannel)
+	{
+		Texture->bFlipGreenChannel = true;
+	}
+	Texture->PostEditChange();
+	Texture->MarkPackageDirty();
+
+	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
+	Out->SetStringField(TEXT("texture"), Texture->GetPathName());
+	Out->SetNumberField(TEXT("width"), Texture->GetSizeX());
+	Out->SetNumberField(TEXT("height"), Texture->GetSizeY());
+	Out->SetBoolField(TEXT("srgb"), Texture->SRGB);
+	Out->SetStringField(TEXT("compression"), StaticEnum<TextureCompressionSettings>()->GetNameStringByValue(static_cast<int64>(Texture->CompressionSettings)));
+	Out->SetBoolField(TEXT("flip_green"), bNormal && bFlipGreen);
+	return VmhJson::Ok(Out);
+}
+
+FString UMetaHumanCharacterService::SetMaterialTexture(const FString& MaterialInstancePath, const FString& ParameterName, const FString& TexturePath)
+{
+	UMaterialInstanceConstant* Instance = VmhAssets::Load<UMaterialInstanceConstant>(MaterialInstancePath);
+	if (!Instance)
+	{
+		return VmhJson::Error(TEXT("MATERIAL_NOT_FOUND"), FString::Printf(TEXT("No material instance constant at %s"), *MaterialInstancePath));
+	}
+	UTexture* Texture = VmhAssets::Load<UTexture>(TexturePath);
+	if (!Texture)
+	{
+		return VmhJson::Error(TEXT("TEXTURE_NOT_FOUND"), FString::Printf(TEXT("No texture at %s"), *TexturePath));
+	}
+	TArray<FMaterialParameterInfo> Infos;
+	TArray<FGuid> Ids;
+	Instance->GetAllTextureParameterInfo(Infos, Ids);
+	TArray<FString> Names;
+	bool bKnown = false;
+	for (const FMaterialParameterInfo& Info : Infos)
+	{
+		Names.Add(Info.Name.ToString());
+		bKnown |= Info.Name == FName(*ParameterName);
+	}
+	if (!bKnown)
+	{
+		return VmhJson::Error(TEXT("NO_SUCH_PARAMETER"), FString::Printf(TEXT("%s has no texture parameter %s; it has: %s"), *MaterialInstancePath, *ParameterName, *FString::Join(Names, TEXT(", "))));
+	}
+	// a texture imported a moment ago is still compiling, and the editor library refuses it (2026-10-04)
+	FTextureCompilingManager::Get().FinishCompilation({ Texture });
+	const FName ParamName(*ParameterName);
+	const FMaterialParameterInfo Info{ ParamName };
+	const bool bSet = UMaterialEditingLibrary::SetMaterialInstanceTextureParameterValue(Instance, ParamName, Texture);
+	if (!bSet)
+	{
+		Instance->SetTextureParameterValueEditorOnly(Info, Texture);
+	}
+	UMaterialEditingLibrary::UpdateMaterialInstance(Instance);
+	Instance->MarkPackageDirty();
+	UTexture* ReadBack = nullptr;
+	Instance->GetTextureParameterValue(FHashedMaterialParameterInfo(Info), ReadBack);
+	const bool bApplied = ReadBack == Texture;
+	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
+	Out->SetStringField(TEXT("material_instance"), Instance->GetPathName());
+	Out->SetStringField(TEXT("parameter"), ParameterName);
+	Out->SetStringField(TEXT("texture"), Texture->GetPathName());
+	Out->SetBoolField(TEXT("set"), bApplied);
+	Out->SetStringField(TEXT("reads_back"), ReadBack ? ReadBack->GetPathName() : TEXT(""));
+	return bApplied ? VmhJson::Ok(Out) : VmhJson::Error(TEXT("SET_FAILED"), TEXT("the parameter does not read back as the texture after setting it"), Out);
+}
+
+FString UMetaHumanCharacterService::AttachSkeletalMeshToBlueprint(const FString& BlueprintPath, const FString& ComponentName, const FString& SkeletalMeshPath, const FString& ParentComponentName, bool bLeaderPose)
+{
+	UBlueprint* Blueprint = VmhAssets::Load<UBlueprint>(BlueprintPath);
+	if (!Blueprint || !Blueprint->SimpleConstructionScript)
+	{
+		return VmhJson::Error(TEXT("BLUEPRINT_NOT_FOUND"), FString::Printf(TEXT("No Blueprint with a construction script at %s"), *BlueprintPath));
+	}
+	USkeletalMesh* Mesh = VmhAssets::Load<USkeletalMesh>(SkeletalMeshPath);
+	if (!Mesh)
+	{
+		return VmhJson::Error(TEXT("MESH_NOT_FOUND"), FString::Printf(TEXT("No skeletal mesh at %s"), *SkeletalMeshPath));
+	}
+	if (ComponentName.IsEmpty())
+	{
+		return VmhJson::Error(TEXT("BAD_ARGS"), TEXT("ComponentName is required"));
+	}
+	USimpleConstructionScript* SCS = Blueprint->SimpleConstructionScript;
+	USCS_Node* Parent = nullptr;
+	if (!ParentComponentName.IsEmpty())
+	{
+		Parent = SCS->FindSCSNode(FName(*ParentComponentName));
+		if (!Parent)
+		{
+			TArray<FString> Names;
+			for (USCS_Node* Node : SCS->GetAllNodes()) { Names.Add(Node->GetVariableName().ToString()); }
+			return VmhJson::Error(TEXT("PARENT_NOT_FOUND"), FString::Printf(TEXT("%s has no component %s; it has: %s"), *BlueprintPath, *ParentComponentName, *FString::Join(Names, TEXT(", "))));
+		}
+	}
+	if (SCS->FindSCSNode(FName(*ComponentName)))
+	{
+		return VmhJson::Error(TEXT("NAME_TAKEN"), FString::Printf(TEXT("%s already has a component named %s"), *BlueprintPath, *ComponentName));
+	}
+	USCS_Node* Node = SCS->CreateNode(USkeletalMeshComponent::StaticClass(), FName(*ComponentName));
+	USkeletalMeshComponent* Template = Cast<USkeletalMeshComponent>(Node->ComponentTemplate);
+	if (!Template)
+	{
+		return VmhJson::Error(TEXT("NODE_FAILED"), TEXT("the construction script made no SkeletalMeshComponent template"));
+	}
+	Template->SetSkeletalMeshAsset(Mesh);
+	bool bLeader = false;
+	if (Parent)
+	{
+		Parent->AddChildNode(Node);
+		if (bLeaderPose)
+		{
+			if (USkinnedMeshComponent* ParentTemplate = Cast<USkinnedMeshComponent>(Parent->ComponentTemplate))
+			{
+				Template->LeaderPoseComponent = ParentTemplate;
+				bLeader = true;
+			}
+		}
+	}
+	else
+	{
+		SCS->AddNode(Node);
+	}
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+	FKismetEditorUtilities::CompileBlueprint(Blueprint, EBlueprintCompileOptions::SkipGarbageCollection);
+	Blueprint->MarkPackageDirty();
+
+	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
+	Out->SetStringField(TEXT("blueprint"), Blueprint->GetPathName());
+	Out->SetStringField(TEXT("component"), ComponentName);
+	Out->SetStringField(TEXT("parent"), Parent ? ParentComponentName : TEXT(""));
+	Out->SetStringField(TEXT("skeletal_mesh"), Mesh->GetPathName());
+	Out->SetBoolField(TEXT("leader_pose"), bLeader);
+	Out->SetBoolField(TEXT("compiled"), Blueprint->Status != BS_Error);
+	Out->SetStringField(TEXT("skeleton"), Mesh->GetSkeleton() ? Mesh->GetSkeleton()->GetPathName() : TEXT(""));
+	Out->SetStringField(TEXT("hint"), TEXT("the mesh follows the parent only when it shares the parent's skeleton (import the accessory FBX onto the MetaHuman body skeleton); save the Blueprint's package when it should stay"));
+	return VmhJson::Ok(Out);
 }

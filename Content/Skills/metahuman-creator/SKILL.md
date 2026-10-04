@@ -87,6 +87,45 @@ grooms under `/Game/MetaHumans/<Name>`.
    follows further edits).
 8. `save(c)` and `end_edit(c)`.
 
+## Custom mesh to MetaHuman (UE 5.8, headless)
+
+The Mesh Import tool's "Import > from custom mesh > Auto Solve" without its viewport (added 2026-10-04 for Master
+Smith's characters). The mesh is a static or skeletal mesh already imported into the project: one combined body+head
+(or a body and a separate head), centimetres, feet on z=0, facing **+Y** (the MetaHuman frame), A-pose with the arms
+clear of the body and the fingers apart, bald, no eyelashes, nothing worn above the skin. A GLB exported from Blender
+with the character facing -Y lands facing +Y in Unreal.
+
+```python
+c = json.loads(mh.create_character("/Game/MetaHumans", "MH_Dryad", ""))["character"]
+r = json.loads(mh.import_from_custom_mesh(c, "/Game/Characters/Dryad/SM_Dryad_conform", "", True, True, 1024))
+#   -> solved, seconds, facing, height_cm, face_tracking {curves, points}, warnings (feet off the floor, metres, facing)
+#      1-3 minutes blocking for a 60k-vertex mesh; the character now holds the body in the MESH'S pose
+mh.save_posed_dna(c, "/Game/Characters/Dryad/SM_Dryad_conform", "", "/Game/Characters/Dryad", "E:/out/Dryad/delivery/metahuman/in", "Dryad_Posed")
+#   -> the UI's "Save Pose": one combined DNA still in that pose = the texture-baking target
+mh.generate_skeletal_mesh_from_dna("/Game/Characters/Dryad/Dryad_Posed", "/Game/Characters/Dryad", "SKM_Dryad_Posed", "body")
+mh.export_fbx("/Game/Characters/Dryad/SKM_Dryad_Posed", "E:/out/Dryad/delivery/metahuman/in/Dryad_Posed.fbx")
+mh.commit_a_pose(c, "/Game/Characters/Dryad/SM_Dryad_conform", "")     # back into the MetaHuman A-pose
+mh.request_auto_rig(c, "JointsOnly", True); mh.request_texture_sources(c, True)
+b = json.loads(mh.build(c, "Cinematic", "Cinematic", "/Game/MetaHumans", ""))
+# textures baked in a DCC onto the posed mesh come back onto the built materials:
+t = json.loads(mh.import_texture("E:/out/Dryad/delivery/metahuman/T_Dryad_Body_N.png", "/Game/MetaHumans/Dryad/Body/Baked", "T_Dryad_Body_N", "normal", True))["texture"]
+mh.set_material_texture("/Game/MetaHumans/Dryad/Body/Materials/MI_Body_Baked", "Normal Baked", t)
+# an accessory rigged to the MetaHuman skeleton (SK FBX imported onto metahuman_base_skel) onto the Blueprint:
+mh.attach_skeletal_mesh_to_blueprint("/Game/MetaHumans/Dryad/BP_Dryad", "Hair", "/Game/MetaHumans/Dryad/Accessories/SK_Dryad_Hair", "Body", True)
+```
+
+What the solver gets wrong is in the mesh (fused fingers, a closed armpit, hair conformed into the skull): fix the
+mesh and run again; `import_from_custom_mesh` returns `warnings` for the feet, the units and the facing. The face
+tracking renders the top 15% of the mesh (or the separate head) front-on, lit from the camera, in a private preview
+scene and writes the picture to `Saved/VibeMetaHumans/FaceTrack_<mesh>.png` (`face_tracking.render`): look at it
+when the tracker finds no face. A head with empty eye sockets or no eyes fails the tracker (the MetaHuman topology
+template did, 2026-10-04; a MetaHuman face with its eyes gave 16 curves / 358 points); then the solve still runs
+on the body and the face stays the archetype's. `export_fbx` fills empty
+material slots with the default material for the export (an empty slot crashed the engine's exporter).
+Built materials and their texture parameters: `MI_Body_Baked` ("Basecolor Baked", "Normal Baked", "SRMF Baked",
+"Scatter Baked"), `MI_Face_Skin_Baked_LOD3` / `_LOD5to7` (the same plus "Normal LOD Baked"), `MI_EyeL/R_Baked` ("Iris
+Basecolor Baked", "Iris Normal Baked", "Sclera ..."), `MI_Teeth_Baked`.
+
 ## Example: a specific character
 
 ```python
