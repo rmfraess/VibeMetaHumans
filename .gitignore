@@ -1,0 +1,6 @@
+Binaries/
+Intermediate/
+Saved/
+*.pyc
+__pycache__/
+.vs/

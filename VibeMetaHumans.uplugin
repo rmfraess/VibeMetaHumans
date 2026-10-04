@@ -1,0 +1,48 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "0.1",
+	"EngineVersion": "5.8.0",
+	"FriendlyName": "VibeMetaHumans",
+	"Description": "AI Editor Toolset for MetaHumans in Unreal Engine 5.8 — lets an MCP agent create and edit MetaHuman Characters, run MetaHuman Animator (video, iPhone, audio) and drive Live Link Face, through Unreal's native ToolsetRegistry, MCP server and AgentSkill systems.",
+	"Category": "Editor",
+	"CreatedBy": "Kevin Buckley",
+	"CreatedByURL": "https://www.vibeue.com",
+	"DocsURL": "https://www.vibeue.com/docs",
+	"MarketplaceURL": "",
+	"SupportURL": "https://www.vibeue.com/support",
+	"CanContainContent": true,
+	"EnabledByDefault": false,
+	"IsBetaVersion": true,
+	"IsExperimentalVersion": false,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "VibeMetaHumans",
+			"Type": "Editor",
+			"LoadingPhase": "PostEngineInit",
+			"WhitelistPlatforms": [
+				"Win64",
+				"Linux",
+				"Mac"
+			]
+		}
+	],
+	"Plugins": [
+		{ "Name": "PythonScriptPlugin", "Enabled": true },
+		{ "Name": "EditorScriptingUtilities", "Enabled": true },
+		{ "Name": "ToolsetRegistry", "Enabled": true },
+		{ "Name": "ModelContextProtocol", "Enabled": true },
+		{ "Name": "MetaHumanSDK", "Enabled": true },
+		{ "Name": "MetaHumanCoreTech", "Enabled": true },
+		{ "Name": "MetaHumanCharacter", "Enabled": true },
+		{ "Name": "MetaHuman", "Enabled": true },
+		{ "Name": "MetaHumanLiveLink", "Enabled": true },
+		{ "Name": "LiveLink", "Enabled": true },
+		{ "Name": "Takes", "Enabled": true },
+		{ "Name": "LevelSequenceEditor", "Enabled": true },
+		{ "Name": "CaptureManagerEditor", "Enabled": true, "Optional": true },
+		{ "Name": "AppleARKitFaceSupport", "Enabled": true, "Optional": true },
+		{ "Name": "MetaHumanAnimationTools", "Enabled": true, "Optional": true }
+	]
+}
