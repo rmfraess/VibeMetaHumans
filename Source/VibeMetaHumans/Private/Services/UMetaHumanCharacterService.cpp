@@ -72,6 +72,11 @@
 #include "Utils/VmhAssets.h"
 #include "Utils/VmhJson.h"
 #include "VibeMetaHumansModule.h"
+#include "FrameTrackingContourData.h"
+#include "MetaHumanFaceContourTrackerAsset.h"
+#include "Nodes/HyprsenseNode.h"
+#include "Nodes/ImageUtilNodes.h"
+#include "Pipeline/Pipeline.h"
 
 namespace
 {
@@ -1336,6 +1341,87 @@ namespace
 	}
 
 	/**
+	 * The face contour tracker run as Epic's Mesh Import tool runs it (MetaHumanCharacterEditorLandmarkTracker::TrackImage):
+	 * the Hyprsense pipeline on the render, and every contour's DENSE points handed to the solver. The subsystem's
+	 * TrackFaceLandmarksFromImage returns the curve controller's visible-curve points instead, and a solve fed those
+	 * stood the posed body 19 cm behind the mesh, then yawed it 28 degrees (the AINavigator, 2026-10-05).
+	 */
+	bool TrackDenseContours(const TArray<FColor>& Pixels, int32 Width, int32 Height, TMap<FString, FTrackingPoints>& OutCurves, FString& OutError)
+	{
+		OutCurves.Reset();
+		UMetaHumanFaceContourTrackerAsset* Tracker = UMetaHumanFaceContourTrackerAsset::LoadDefaultTracker();
+		if (!Tracker || !Tracker->LoadTrackersSynchronous() || !Tracker->CanProcess())
+		{
+			OutError = TEXT("the default face contour tracker asset could not load its models");
+			return false;
+		}
+		UE::MetaHuman::Pipeline::FPipeline Pipeline;
+		TSharedPtr<UE::MetaHuman::Pipeline::FFColorToUEImageNode> Image = Pipeline.MakeNode<UE::MetaHuman::Pipeline::FFColorToUEImageNode>("RenderTarget");
+		TSharedPtr<UE::MetaHuman::Pipeline::FHyprsenseNode> Generic = Pipeline.MakeNode<UE::MetaHuman::Pipeline::FHyprsenseNode>("GenericTracker");
+		Image->Samples = Pixels;
+		Image->Width = Width;
+		Image->Height = Height;
+		PRAGMA_DISABLE_DEPRECATION_WARNINGS
+		#define VMH_EFFECTIVE_TRACKER(T) TSharedPtr<UE::NNE::IModelInstanceRunSync> T = Tracker->T.IsValid() ? Tracker->T : Tracker->T##Model;
+			VMH_EFFECTIVE_TRACKER(FullFaceTracker)
+			VMH_EFFECTIVE_TRACKER(FaceDetector)
+			VMH_EFFECTIVE_TRACKER(BrowsDenseTracker)
+			VMH_EFFECTIVE_TRACKER(EyesDenseTracker)
+			VMH_EFFECTIVE_TRACKER(MouthDenseTracker)
+			VMH_EFFECTIVE_TRACKER(LipzipDenseTracker)
+			VMH_EFFECTIVE_TRACKER(NasioLabialsDenseTracker)
+			VMH_EFFECTIVE_TRACKER(ChinDenseTracker)
+			VMH_EFFECTIVE_TRACKER(TeethDenseTracker)
+			VMH_EFFECTIVE_TRACKER(TeethConfidenceTracker)
+		#undef VMH_EFFECTIVE_TRACKER
+		PRAGMA_ENABLE_DEPRECATION_WARNINGS
+		if (!Generic->SetTrackers(FullFaceTracker, FaceDetector, BrowsDenseTracker, EyesDenseTracker, MouthDenseTracker, LipzipDenseTracker,
+		                          NasioLabialsDenseTracker, ChinDenseTracker, TeethDenseTracker, TeethConfidenceTracker))
+		{
+			OutError = Generic->GetErrorMessage();
+			return false;
+		}
+		Pipeline.MakeConnection(Image, Generic);
+		FFrameTrackingContourData Result;
+		bool bOk = true;
+		UE::MetaHuman::Pipeline::FFrameComplete OnFrame;
+		UE::MetaHuman::Pipeline::FProcessComplete OnDone;
+		const FString Pin = Generic->Name + TEXT(".Contours Out");
+		OnFrame.AddLambda([Pin, &Result](TSharedPtr<UE::MetaHuman::Pipeline::FPipelineData> Data)
+		{
+			Result = Data->GetData<FFrameTrackingContourData>(Pin);
+		});
+		OnDone.AddLambda([&bOk](TSharedPtr<UE::MetaHuman::Pipeline::FPipelineData> Data)
+		{
+			bOk = Data->GetExitStatus() == UE::MetaHuman::Pipeline::EPipelineExitStatus::Ok;
+		});
+		UE::MetaHuman::Pipeline::FPipelineRunParameters Run;
+		Run.SetStartFrame(0);
+		Run.SetEndFrame(1);
+		Run.SetOnFrameComplete(OnFrame);
+		Run.SetOnProcessComplete(OnDone);
+		Run.SetGpuToUse(UE::MetaHuman::Pipeline::FPipeline::PickPhysicalDevice());
+		Run.SetMode(UE::MetaHuman::Pipeline::EPipelineMode::PushSyncNodes);
+		Pipeline.Run(Run);
+		if (!bOk || !Result.ContainsData())
+		{
+			OutError = bOk ? TEXT("the tracker found no face") : TEXT("the tracking pipeline failed");
+			return false;
+		}
+		for (const TPair<FString, FTrackingContour>& Pair : Result.TrackingContours)
+		{
+			if (Pair.Value.DensePoints.Num() == 0)
+			{
+				continue;
+			}
+			FTrackingPoints Points;
+			Points.TrackingPoints = Pair.Value.DensePoints;
+			OutCurves.Add(Pair.Key, Points);
+		}
+		return OutCurves.Num() > 0;
+	}
+
+	/**
 	 * Render the target mesh's head front-on in a private preview scene and track the face landmarks, as the tool's
 	 * contour mechanic does with auto framing. Fills the tracking results (camera, image size, curves).
 	 */
@@ -1464,10 +1550,19 @@ namespace
 				Report->SetStringField(TEXT("face_render"), DumpPath);
 			}
 		}
-		if (!Subsystem->TrackFaceLandmarksFromImage(Pixels, ImageSize, ImageSize, OutCurves) || OutCurves.IsEmpty())
+		FString DenseError;
+		if (TrackDenseContours(Pixels, ImageSize, ImageSize, OutCurves, DenseError))
 		{
-			OutError = FString::Printf(TEXT("the face landmark tracker found no face in the front-on render %s (is the head bald and facing +Y, the mesh in centimetres with its feet on z=0?)"), *DumpPath);
-			return false;
+			Track->SetStringField(TEXT("tracked_with"), TEXT("dense contours (the Mesh Import tool's path)"));
+		}
+		else
+		{
+			Track->SetStringField(TEXT("tracked_with"), FString::Printf(TEXT("the subsystem's visible-curve points (dense contours failed: %s)"), *DenseError));
+			if (!Subsystem->TrackFaceLandmarksFromImage(Pixels, ImageSize, ImageSize, OutCurves) || OutCurves.IsEmpty())
+			{
+				OutError = FString::Printf(TEXT("the face landmark tracker found no face in the front-on render %s (is the head bald and facing +Y, the mesh in centimetres with its feet on z=0?)"), *DumpPath);
+				return false;
+			}
 		}
 
 		FMinimalViewInfo ViewInfo;

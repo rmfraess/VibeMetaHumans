@@ -80,6 +80,9 @@ public class VibeMetaHumans : ModuleRules
 				"MetaHumanCoreTechLib",
 				"MetaHumanCaptureData",
 				"MetaHumanPipelineCore",
+				"MetaHumanPipeline",        // FHyprsenseNode: the face contour tracker as the Mesh Import tool runs it (2026-10-05)
+				"MetaHumanFaceContourTracker", // UMetaHumanFaceContourTrackerAsset (its NNE models)
+				"NNE",
 				"CaptureDataCore",          // UCaptureData / UFootageCaptureData (CaptureData plugin)
 				"RigLogicModule",           // EDNADataLayer, DNA readers
 				"InterchangeDNA",           // a skeletal mesh from a DNA (generate_skeletal_mesh_from_dna, 2026-10-04)
