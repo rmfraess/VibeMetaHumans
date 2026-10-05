@@ -6,7 +6,10 @@
 #include "AssetExportTask.h"
 #include "AssetImportTask.h"
 #include "AssetToolsModule.h"
+#include "Components/DynamicMeshComponent.h"
 #include "Components/SceneCaptureComponent2D.h"
+#include "DynamicMesh/DynamicMesh3.h"
+#include "DynamicMesh/MeshNormals.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "DNA.h"
@@ -1336,7 +1339,8 @@ namespace
 	 * Render the target mesh's head front-on in a private preview scene and track the face landmarks, as the tool's
 	 * contour mechanic does with auto framing. Fills the tracking results (camera, image size, curves).
 	 */
-	bool TrackFaceOnMesh(UMetaHumanCharacterEditorSubsystem* Subsystem, UObject* Mesh, const FBox& HeadBounds, const FVector& Facing, int32 ImageSize,
+	bool TrackFaceOnMesh(UMetaHumanCharacterEditorSubsystem* Subsystem, UObject* Mesh, const TArray<FVector3f>& Vertices, const TArray<int32>& Triangles,
+	                     const FBox& HeadBounds, const FVector& Facing, int32 ImageSize,
 	                     FMetaHumanCharacterTargetTrackingResults& OutResults, TMap<FString, FTrackingPoints>& OutCurves, TSharedPtr<FJsonObject> Report, FString& OutError)
 	{
 		const FVector HeadCenter = HeadBounds.GetCenter();
@@ -1366,34 +1370,65 @@ namespace
 		}
 
 		// lit from the camera, softly: the default key from above left the face in hard shadow (2026-10-04)
-		FPreviewScene Scene{ FPreviewScene::ConstructionValues().SetSkyBrightness(1.5f).SetLightBrightness(2.5f) };
+		// lit from the camera, softly (2.5 / 1.5 blew a white default material out to a flat mask, 2026-10-05)
+		FPreviewScene Scene{ FPreviewScene::ConstructionValues().SetSkyBrightness(0.6f).SetLightBrightness(1.2f) };
 		Scene.SetLightDirection(CameraRotation);
+		// The mesh with its own textures when it can be rendered as it is: a face painted on the seed gives the tracker
+		// eyes and brows. A Nanite static mesh cannot (the capture draws its 40-face fallback), so it goes in as a
+		// dynamic mesh of the conform's own vertices, as the Mesh Import tool renders, in the tool's skin material.
+		UStaticMesh* StaticMesh = Cast<UStaticMesh>(Mesh);
+		USkeletalMesh* SkeletalMesh = Cast<USkeletalMesh>(Mesh);
 		UMeshComponent* MeshComponent = nullptr;
-		if (UStaticMesh* StaticMesh = Cast<UStaticMesh>(Mesh))
+		FString RenderedAs;
+		if (StaticMesh && !StaticMesh->IsNaniteEnabled())
 		{
 			UStaticMeshComponent* C = NewObject<UStaticMeshComponent>(GetTransientPackage(), NAME_None, RF_Transient);
 			C->SetStaticMesh(StaticMesh);
+			C->SetForcedLodModel(1);
 			MeshComponent = C;
+			RenderedAs = TEXT("static mesh, its own materials, LOD0");
 		}
-		else if (USkeletalMesh* SkeletalMesh = Cast<USkeletalMesh>(Mesh))
+		else if (SkeletalMesh)
 		{
 			USkeletalMeshComponent* C = NewObject<USkeletalMeshComponent>(GetTransientPackage(), NAME_None, RF_Transient);
 			C->SetSkeletalMeshAsset(SkeletalMesh);
+			C->SetForcedLOD(1);
 			MeshComponent = C;
+			RenderedAs = TEXT("skeletal mesh, its own materials, LOD0");
 		}
-		if (!MeshComponent)
+		else
 		{
-			OutError = TEXT("not a mesh");
-			return false;
+			UE::Geometry::FDynamicMesh3 DynamicMesh;
+			DynamicMesh.EnableVertexNormals(FVector3f::UnitZ());
+			for (const FVector3f& V : Vertices)
+			{
+				DynamicMesh.AppendVertex(FVector3d(V));
+			}
+			for (int32 i = 0; i + 2 < Triangles.Num(); i += 3)
+			{
+				DynamicMesh.AppendTriangle(Triangles[i], Triangles[i + 1], Triangles[i + 2]);
+			}
+			UE::Geometry::FMeshNormals::QuickComputeVertexNormals(DynamicMesh);
+			UDynamicMeshComponent* C = NewObject<UDynamicMeshComponent>(GetTransientPackage(), NAME_None, RF_Transient);
+			C->SetMesh(MoveTemp(DynamicMesh));
+			MeshComponent = C;
+			RenderedAs = TEXT("dynamic mesh of the conform vertices (a Nanite static mesh), the tool's skin material");
 		}
 		Scene.AddComponent(MeshComponent, FTransform::Identity);
-		for (int32 i = 0; i < MeshComponent->GetNumMaterials(); ++i)
+		UMaterialInterface* Skin = LoadObject<UMaterialInterface>(nullptr, TEXT("/MetaHumanCharacter/Materials/MI_M2M_Head.MI_M2M_Head"));
+		if (!Skin)
 		{
-			if (!MeshComponent->GetMaterial(i))
+			Skin = UMaterial::GetDefaultMaterial(MD_Surface);
+		}
+		for (int32 i = 0; i < FMath::Max(1, MeshComponent->GetNumMaterials()); ++i)
+		{
+			if (!MeshComponent->GetMaterial(i) || Cast<UDynamicMeshComponent>(MeshComponent))
 			{
-				MeshComponent->SetMaterial(i, UMaterial::GetDefaultMaterial(MD_Surface));
+				MeshComponent->SetMaterial(i, Skin);
 			}
 		}
+		Track->SetStringField(TEXT("rendered_as"), RenderedAs);
+		Track->SetNumberField(TEXT("render_triangles"), Triangles.Num() / 3);
 
 		UTextureRenderTarget2D* RenderTarget = NewObject<UTextureRenderTarget2D>(GetTransientPackage(), NAME_None, RF_Transient);
 		RenderTarget->RenderTargetFormat = RTF_RGBA8;
@@ -1526,7 +1561,8 @@ FString UMetaHumanCharacterService::ImportFromCustomMesh(const FString& Characte
 		FMetaHumanCharacterTargetTrackingResults Tracking;
 		TMap<FString, FTrackingPoints> Curves;
 		FString TrackError;
-		if (TrackFaceOnMesh(Ctx.Subsystem, Head ? Head : Mesh, HeadBounds, Facing, FMath::Clamp(TrackingImageSize, 256, 4096), Tracking, Curves, Out, TrackError))
+		if (TrackFaceOnMesh(Ctx.Subsystem, Head ? Head : Mesh, Head ? Target.HeadVertices : Target.BodyVertices, Head ? Target.HeadVertexIndices : Target.BodyVertexIndices,
+		                    HeadBounds, Facing, FMath::Clamp(TrackingImageSize, 256, 4096), Tracking, Curves, Out, TrackError))
 		{
 			Ctx.Subsystem->CommitTargetMeshTrackingResults(Ctx.Character, Key, Tracking);
 			Params.CurveTrackingPoints = Curves;
@@ -1751,11 +1787,7 @@ FString UMetaHumanCharacterService::ExportFbx(const FString& AssetPath, const FS
 				return VmhJson::Error(TEXT("BAD_MATERIAL_INDEX"), FString::Printf(TEXT("LOD0 section uses material index %d but the mesh has %d material slots; the FBX exporter would assert. Duplicate the mesh and fix its materials first"), Section.MaterialIndex, Materials.Num()));
 			}
 		}
-		if (SkeletalMesh->GetLODNum() != SkeletalMesh->GetLODInfoArray().Num())
-		{
-			for (int32 i : Filled) { Materials[i].MaterialInterface = nullptr; }
-			return VmhJson::Error(TEXT("BAD_LOD_INFO"), FString::Printf(TEXT("%d LODs but %d LOD info entries; the FBX exporter would assert"), SkeletalMesh->GetLODNum(), SkeletalMesh->GetLODInfoArray().Num()));
-		}
+		// (a mesh generated from a DNA carries 8 LOD info entries over 4 LODs and exports fine: not a reason to refuse)
 	}
 	else if (UStaticMesh* StaticMesh = Cast<UStaticMesh>(Asset))
 	{

@@ -84,6 +84,8 @@ public class VibeMetaHumans : ModuleRules
 				"RigLogicModule",           // EDNADataLayer, DNA readers
 				"InterchangeDNA",           // a skeletal mesh from a DNA (generate_skeletal_mesh_from_dna, 2026-10-04)
 				"MaterialEditor",           // UMaterialEditingLibrary (set_material_texture)
+				"GeometryCore",             // FDynamicMesh3: the conform target rendered for face tracking
+				"GeometryFramework",        // UDynamicMeshComponent
 
 				// MetaHuman Animator (MetaHuman plugin)
 				"MetaHumanCore",

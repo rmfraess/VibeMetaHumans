@@ -122,6 +122,12 @@ when the tracker finds no face. A head with empty eye sockets or no eyes fails t
 template did, 2026-10-04; a MetaHuman face with its eyes gave 16 curves / 358 points); then the solve still runs
 on the body and the face stays the archetype's. `export_fbx` fills empty
 material slots with the default material for the export (an empty slot crashed the engine's exporter).
+Two solves for one character (the AINavigator, 2026-10-05): the solve WITH face landmarks stood the posed body 19 cm
+behind the mesh (and 2% taller), so a bake against its posed DNA missed; the solve WITHOUT (`bTrackFace=False`) sat
+on the mesh to the millimetre but keeps the archetype face. Bake from a scratch body-only character's posed DNA
+(then delete it), and keep the face-tracked character for the rig and the build; the textures carry over
+because every MetaHuman shares the UV layout. Conform once per fresh character: a second
+`import_from_custom_mesh` after `commit_a_pose` gave a twisted posed DNA.
 Built materials and their texture parameters: `MI_Body_Baked` ("Basecolor Baked", "Normal Baked", "SRMF Baked",
 "Scatter Baked"), `MI_Face_Skin_Baked_LOD3` / `_LOD5to7` (the same plus "Normal LOD Baked"), `MI_EyeL/R_Baked` ("Iris
 Basecolor Baked", "Iris Normal Baked", "Sclera ..."), `MI_Teeth_Baked`.
