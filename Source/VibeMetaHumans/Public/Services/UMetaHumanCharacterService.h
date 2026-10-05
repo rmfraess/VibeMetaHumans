@@ -272,4 +272,12 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
 	static FString AttachSkeletalMeshToBlueprint(const FString& BlueprintPath, const FString& ComponentName, const FString& SkeletalMeshPath, const FString& ParentComponentName = TEXT("Body"), bool bLeaderPose = true);
+
+	/**
+	 * Add a StaticMeshComponent to a Blueprint under a parent component, attached to one of its bone sockets ("head" on a
+	 * MetaHuman's Body) with a relative transform (centimetres, degrees): a rigid accessory - a headset, a visor, a
+	 * horn - rides the bone without any skinning. Replaces a component of that name if one exists.
+	 */
+	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	static FString AttachStaticMeshToBlueprint(const FString& BlueprintPath, const FString& ComponentName, const FString& StaticMeshPath, const FString& ParentComponentName, const FString& SocketName, FVector RelativeLocation, FRotator RelativeRotation);
 };

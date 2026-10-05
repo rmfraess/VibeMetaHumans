@@ -112,6 +112,10 @@ t = json.loads(mh.import_texture("E:/out/Dryad/delivery/metahuman/T_Dryad_Body_N
 mh.set_material_texture("/Game/MetaHumans/Dryad/Body/Materials/MI_Body_Baked", "Normal Baked", t)
 # an accessory rigged to the MetaHuman skeleton (SK FBX imported onto metahuman_base_skel) onto the Blueprint:
 mh.attach_skeletal_mesh_to_blueprint("/Game/MetaHumans/Dryad/BP_Dryad", "Hair", "/Game/MetaHumans/Dryad/Accessories/SK_Dryad_Hair", "Body", True)
+# a rigid accessory rides a bone socket instead (a headset on "head"): relative transform in the socket's frame, centimetres
+mh.attach_static_mesh_to_blueprint("/Game/MetaHumans/Dryad/BP_Dryad", "Headset", "/Game/MetaHumans/Dryad/Accessories/SM_Headset", "Body", "head", unreal.Vector(-161.5, 1.5, 0.1), unreal.Rotator(roll=0, pitch=-90, yaw=0))
+# (unreal.Rotator takes roll, pitch, yaw in that order - name them; the built head sits about 23 cm behind the
+#  conform mesh's head and 5 cm to the side: measure the built face mesh's bounds against the conform mesh's)
 ```
 
 What the solver gets wrong is in the mesh (fused fingers, a closed armpit, hair conformed into the skull): fix the

@@ -2038,3 +2038,68 @@ FString UMetaHumanCharacterService::AttachSkeletalMeshToBlueprint(const FString&
 	Out->SetStringField(TEXT("hint"), TEXT("the mesh follows the parent only when it shares the parent's skeleton (import the accessory FBX onto the MetaHuman body skeleton); save the Blueprint's package when it should stay"));
 	return VmhJson::Ok(Out);
 }
+
+FString UMetaHumanCharacterService::AttachStaticMeshToBlueprint(const FString& BlueprintPath, const FString& ComponentName, const FString& StaticMeshPath, const FString& ParentComponentName, const FString& SocketName, FVector RelativeLocation, FRotator RelativeRotation)
+{
+	UBlueprint* Blueprint = VmhAssets::Load<UBlueprint>(BlueprintPath);
+	if (!Blueprint || !Blueprint->SimpleConstructionScript)
+	{
+		return VmhJson::Error(TEXT("BLUEPRINT_NOT_FOUND"), FString::Printf(TEXT("No Blueprint with a construction script at %s"), *BlueprintPath));
+	}
+	UStaticMesh* Mesh = VmhAssets::Load<UStaticMesh>(StaticMeshPath);
+	if (!Mesh)
+	{
+		return VmhJson::Error(TEXT("MESH_NOT_FOUND"), FString::Printf(TEXT("No static mesh at %s"), *StaticMeshPath));
+	}
+	if (ComponentName.IsEmpty() || ParentComponentName.IsEmpty())
+	{
+		return VmhJson::Error(TEXT("BAD_ARGS"), TEXT("ComponentName and ParentComponentName are required"));
+	}
+	USimpleConstructionScript* SCS = Blueprint->SimpleConstructionScript;
+	USCS_Node* Parent = SCS->FindSCSNode(FName(*ParentComponentName));
+	if (!Parent)
+	{
+		TArray<FString> Names;
+		for (USCS_Node* Node : SCS->GetAllNodes()) { Names.Add(Node->GetVariableName().ToString()); }
+		return VmhJson::Error(TEXT("PARENT_NOT_FOUND"), FString::Printf(TEXT("%s has no component %s; it has: %s"), *BlueprintPath, *ParentComponentName, *FString::Join(Names, TEXT(", "))));
+	}
+	bool bSocketKnown = true;
+	if (!SocketName.IsEmpty())
+	{
+		if (USkinnedMeshComponent* ParentSkinned = Cast<USkinnedMeshComponent>(Parent->ComponentTemplate))
+		{
+			bSocketKnown = ParentSkinned->DoesSocketExist(FName(*SocketName));
+		}
+	}
+	if (USCS_Node* Old = SCS->FindSCSNode(FName(*ComponentName)))
+	{
+		SCS->RemoveNodeAndPromoteChildren(Old);
+	}
+	USCS_Node* Node = SCS->CreateNode(UStaticMeshComponent::StaticClass(), FName(*ComponentName));
+	UStaticMeshComponent* Template = Cast<UStaticMeshComponent>(Node->ComponentTemplate);
+	if (!Template)
+	{
+		return VmhJson::Error(TEXT("NODE_FAILED"), TEXT("the construction script made no StaticMeshComponent template"));
+	}
+	Template->SetStaticMesh(Mesh);
+	Template->SetRelativeLocation_Direct(RelativeLocation);
+	Template->SetRelativeRotation_Direct(RelativeRotation);
+	Node->AttachToName = SocketName.IsEmpty() ? NAME_None : FName(*SocketName);
+	Parent->AddChildNode(Node);
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+	FKismetEditorUtilities::CompileBlueprint(Blueprint, EBlueprintCompileOptions::SkipGarbageCollection);
+	Blueprint->MarkPackageDirty();
+
+	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
+	Out->SetStringField(TEXT("blueprint"), Blueprint->GetPathName());
+	Out->SetStringField(TEXT("component"), ComponentName);
+	Out->SetStringField(TEXT("parent"), ParentComponentName);
+	Out->SetStringField(TEXT("socket"), SocketName);
+	Out->SetBoolField(TEXT("socket_known"), bSocketKnown);
+	Out->SetStringField(TEXT("static_mesh"), Mesh->GetPathName());
+	Out->SetStringField(TEXT("relative_location"), RelativeLocation.ToString());
+	Out->SetStringField(TEXT("relative_rotation"), RelativeRotation.ToString());
+	Out->SetBoolField(TEXT("compiled"), Blueprint->Status != BS_Error);
+	Out->SetStringField(TEXT("hint"), TEXT("a placed instance made before this call keeps its old components: respawn it; save the Blueprint's package when it should stay"));
+	return VmhJson::Ok(Out);
+}
