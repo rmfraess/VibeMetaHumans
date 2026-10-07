@@ -56,9 +56,24 @@ public:
 	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
 	static FString GetSummary(const FString& CharacterPath);
 
-	/** Save the character asset. */
+	/** Save the character asset. Routes to save_deferred when the character is in an edit session (see there for why). */
 	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
 	static FString Save(const FString& CharacterPath);
+
+	/**
+	 * End the edit session now and save on a LATER editor tick, at least DelaySeconds and MinFrames away, never
+	 * inside this call. Why: saving a Creator character in the same call that changed it deadlocked the editor four
+	 * times (2026-10-06/07) - the minidumps showed the game thread sleep-polling inside UPackage::Save for async
+	 * work (face texture synthesis) that only the game thread advances, so the save waits on itself. Returns at
+	 * once; poll get_save_status. A newer save_deferred on the same character re-arms the timer; if it is back in
+	 * an edit session when the tick fires, that save is skipped (the next save_deferred tries again).
+	 */
+	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	static FString SaveDeferred(const FString& CharacterPath, float DelaySeconds = 15.f, int32 MinFrames = 45);
+
+	/** pending / status (requested|skipped|saved|failed) / requested_at / at / seconds / error for the character's last (or in-flight) save_deferred. */
+	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	static FString GetSaveStatus(const FString& CharacterPath);
 
 	// =================================================================
 	// Look: skin, eyes, makeup, head model, face evaluation
@@ -99,6 +114,22 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
 	static FString SetBodyConstraints(const FString& CharacterPath, const FString& ValuesJson, bool bNormalized = true);
+
+	/** Face model (sculpt) landmarks: index -> [x,y,z] cm in the edit frame, plus likely_ears/likely_neck/likely_skull
+	 * indices guessed from their positions (the landmark SET differs per preset, so this is never a fixed index list). */
+	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	static FString GetFaceLandmarks(const FString& CharacterPath);
+
+	/**
+	 * Move sculpt landmarks toward targets and hold every other one in place, repeating translate+commit until
+	 * every residual is under ToleranceCm or MaxIterations runs out. TargetsJson: {"index":[dx,dy,dz]} cm deltas
+	 * (absolute positions instead when bAbsolute). HoldJson: "auto" (every non-target landmark, the default),
+	 * "none", or a JSON array of indices to hold. Refuses while the character wears grooms (spawning the Creator
+	 * preview with grooms on hung the editor for minutes) or while its face rig is on, and refuses any target that
+	 * looks like an ear landmark unless bAllowEars (moving them crumpled MissionCommander's ears, 2026-10-07).
+	 */
+	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	static FString MoveFaceLandmarks(const FString& CharacterPath, const FString& TargetsJson, const FString& HoldJson = TEXT("auto"), float ToleranceCm = 0.06f, int32 MaxIterations = 12, float Gain = 2.5f, bool bAllowEars = false, bool bAbsolute = false);
 
 	/** Convenience body shape: each value 0..1 (negative = leave unchanged), HeightCm 135..220 (negative = unchanged). */
 	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
@@ -196,6 +227,22 @@ public:
 	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
 	static FString Build(const FString& CharacterPath, const FString& PipelineType, const FString& Quality, const FString& BuildPath, const FString& NameOverride);
 
+	/**
+	 * Queue a build() on a later editor tick and return at once (status queued). Why: a 4-5 minute blocking build
+	 * made the MCP client time out and drop the session's Unreal tools (2026-10-06). The build itself still blocks
+	 * the game thread for several minutes once it starts - poll get_build_status rather than waiting on this call.
+	 */
+	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	static FString BuildAsync(const FString& CharacterPath, const FString& PipelineType, const FString& Quality, const FString& BuildPath, const FString& NameOverride);
+
+	/** status (queued|running|done|failed) / seconds / blueprints / output_folder / error for the character's last (or in-flight) build_async. */
+	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	static FString GetBuildStatus(const FString& CharacterPath);
+
+	/** status (running|done|failed_or_not_requested) for request_auto_rig's non-blocking mode (it already reports progress on the subsystem; this just shapes it the same way as get_build_status). */
+	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	static FString GetAutoRigStatus(const FString& CharacterPath);
+
 	/** Spawn the live-editing MetaHuman actor in the current editor level at a transform. */
 	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
 	static FString SpawnInLevel(const FString& CharacterPath, FVector Location, FRotator Rotation, bool bKeepTransient = false);
@@ -255,8 +302,19 @@ public:
 	static FString ExportFbx(const FString& AssetPath, const FString& FilePath);
 
 	/**
+	 * Replace an existing skeletal mesh's geometry IN PLACE from an FBX, on its own skeleton, with its slot
+	 * materials restored by slot name afterwards (bKeepMaterials): the Content Browser's "Reimport" without the
+	 * dialog. Refuses (SKELETON_MISMATCH) rather than leaving the Blueprint pointing at a retargeted mesh.
+	 */
+	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	static FString ReimportSkeletalMesh(const FString& AssetPath, const FString& FbxPath, bool bKeepMaterials = true);
+
+	/**
 	 * Import a PNG/TGA/EXR as a Texture2D. Kind: "color" (sRGB, default compression), "normal" (linear, Normalmap
 	 * compression; bFlipGreen turns an OpenGL +Y map into Unreal's -Y), "mask" (linear, Masks), "linear".
+	 * Finishes the texture's compilation and refuses (IMPORT_INCOMPLETE, nothing marked dirty) when it built as a
+	 * 32x32 placeholder with no miplevels: a texture-pipeline stall after long editor sessions (2026-10-07) that
+	 * rendered a face white and hangs the next save of any material instance that uses it - restart the editor first.
 	 */
 	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
 	static FString ImportTexture(const FString& FilePath, const FString& PackagePath, const FString& AssetName, const FString& Kind = TEXT("color"), bool bFlipGreen = false);
@@ -280,4 +338,38 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
 	static FString AttachStaticMeshToBlueprint(const FString& BlueprintPath, const FString& ComponentName, const FString& StaticMeshPath, const FString& ParentComponentName, const FString& SocketName, FVector RelativeLocation, FRotator RelativeRotation);
+
+	/** Remove a component (by name) from a Blueprint's construction script, promoting its children. Compiles; marks the Blueprint dirty. */
+	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	static FString RemoveComponentFromBlueprint(const FString& BlueprintPath, const FString& ComponentName);
+
+	// =================================================================
+	// Hair (2026-10-07): grooms on a built MetaHuman Blueprint
+	// =================================================================
+
+	/**
+	 * Every groom Wardrobe Item under the MetaHuman plugin's optional content (path, display name, slot), for
+	 * SlotName (Hair, Eyebrows, Eyelashes, Beard, Mustache, Peachfuzz) or every slot when empty.
+	 */
+	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	static FString ListWardrobeItems(const FString& SlotName);
+
+	/**
+	 * Add a GroomComponent under a built MetaHuman Blueprint's TargetComponent (default "Face"), bound to it:
+	 * GroomAssetPath may be a groom Wardrobe Item (WI_Hair_...), the plugin's own GroomBindingAsset, or a bare
+	 * UGroomAsset (e.g. from import_groom, which has no plugin binding to retarget). For a wardrobe item or plugin
+	 * binding, the plugin's binding is DUPLICATED into the Blueprint's own Accessories/ComponentName folder and
+	 * retargeted onto the Blueprint's built face mesh (DrHart's working recipe, 2026-10-07: Build()'s own groom
+	 * pipeline does the same - DuplicateObject, SetTargetSkeletalMesh, let the async RBF rebuild run). With
+	 * MaterialFromComponent, its override materials are copied onto the new component's matching slots (by name,
+	 * then by position). bSaveBinding saves the duplicated binding (wait at least a minute after this call if you
+	 * set it false and save it yourself - a save mid-build can hang the editor). No Blueprint save here either; the
+	 * caller saves it once satisfied.
+	 */
+	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	static FString AddGroomToBlueprint(const FString& BlueprintPath, const FString& ComponentName, const FString& GroomAssetPath, const FString& TargetComponent = TEXT("Face"), const FString& MaterialFromComponent = TEXT(""), bool bSaveBinding = true);
+
+	/** Import a groom from an Alembic (.abc) file (guides/strands) as a UGroomAsset: UGroomImportOptions / AssetImportTask, automated (no dialog). Reports each group's strand/guide counts. */
+	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	static FString ImportGroom(const FString& AlembicPath, const FString& PackagePath, const FString& AssetName);
 };

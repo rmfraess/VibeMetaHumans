@@ -89,6 +89,8 @@ public class VibeMetaHumans : ModuleRules
 				"MaterialEditor",           // UMaterialEditingLibrary (set_material_texture)
 				"GeometryCore",             // FDynamicMesh3: the conform target rendered for face tracking
 				"GeometryFramework",        // UDynamicMeshComponent
+				"HairStrandsCore",          // UGroomComponent/UGroomAsset/UGroomBindingAsset (2026-10-07 hair tools)
+				"HairStrandsEditor",        // UHairStrandsFactory (import_groom)
 
 				// MetaHuman Animator (MetaHuman plugin)
 				"MetaHumanCore",

@@ -12,6 +12,7 @@
 #include "DynamicMesh/MeshNormals.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Containers/Ticker.h"
 #include "DNA.h"
 #include "DNAAssetUserData.h"
 #include "DNACommon.h"
@@ -27,7 +28,12 @@
 #include "Exporters/FbxExportOption.h"
 #include "Exporters/SkeletalMeshExporterFBX.h"
 #include "Exporters/StaticMeshExporterFBX.h"
+#include "Factories/FbxImportUI.h"
+#include "Factories/FbxSkeletalMeshImportData.h"
 #include "Factories/TextureFactory.h"
+#include "GroomAsset.h"
+#include "GroomBindingAsset.h"
+#include "GroomComponent.h"
 #include "HAL/FileManager.h"
 #include "IAssetTools.h"
 #include "ImageUtils.h"
@@ -246,6 +252,107 @@ namespace
 		Out->SetStringField(TEXT("rig_state"), RigStateName(Ctx.Subsystem->GetRiggingState(Ctx.Character)));
 		return VmhJson::Ok(Out);
 	}
+
+	TArray<TSharedPtr<FJsonValue>> IntArray(const TArray<int32>& Values)
+	{
+		TArray<TSharedPtr<FJsonValue>> Out;
+		for (int32 V : Values) { Out.Add(MakeShared<FJsonValueNumber>(V)); }
+		return Out;
+	}
+
+	// =====================================================================
+	// Deferred save / build (2026-10-07): a Creator save, or a build, made in the same call that queued the async
+	// work it waits on deadlocked the shared editor (UPackage::Save / BuildMetaHuman sleep-polling for work only the
+	// game thread advances - Master Smith's minidumps, out/_MetaHumanBatch/hang/). Both are deferred to a LATER
+	// editor tick with FTSTicker so the RPC call itself returns at once; the heavy work still runs on the game
+	// thread once it fires, so poll the matching get_*_status rather than waiting on these calls.
+	// =====================================================================
+
+	struct FSaveDeferredState
+	{
+		FString Status = TEXT("pending"); // pending | skipped | saved | failed
+		FString Error;
+		FString RequestedAt;
+		FString At;
+		double StartTime = 0.0;
+		double Seconds = 0.0;
+		int32 Ticks = 0;
+		int32 MinFrames = 45;
+		float DelaySeconds = 15.f;
+		bool bActive = true;
+	};
+	TMap<FString, FSaveDeferredState> GPendingSaves;
+
+	struct FBuildAsyncState
+	{
+		FString Status = TEXT("queued"); // queued | running | done | failed
+		FString Error;
+		double Seconds = 0.0;
+		TArray<FString> Blueprints;
+		FString OutputFolder;
+	};
+	TMap<FString, FBuildAsyncState> GPendingBuilds;
+
+	FString NowString()
+	{
+		return FDateTime::Now().ToString(TEXT("%H:%M:%S"));
+	}
+
+	/** The groom slots (Hair, Eyebrows, ...) a character's wardrobe selections fill right now. */
+	TArray<FString> WornGroomSlots(UMetaHumanCharacter* Character)
+	{
+		static const TArray<FString> GroomSlots = { TEXT("Hair"), TEXT("Eyebrows"), TEXT("Eyelashes"), TEXT("Beard"), TEXT("Mustache"), TEXT("Peachfuzz") };
+		TArray<FString> Worn;
+		if (UMetaHumanCollection* Collection = Character->GetMutableInternalCollection())
+		{
+			for (const FMetaHumanPipelineSlotSelectionData& Data : Collection->GetMutableDefaultInstance()->GetSlotSelectionData())
+			{
+				const FString Slot = Data.Selection.SlotName.ToString();
+				if (!Data.Selection.SelectedItem.IsNull() && GroomSlots.Contains(Slot))
+				{
+					Worn.Add(Slot);
+				}
+			}
+		}
+		return Worn;
+	}
+
+	/**
+	 * Which Creator sculpt landmarks look like ears, neck or skull-top FROM THEIR POSITIONS (the landmark set
+	 * differs per preset - Lorenzo 79, Orlando 125 - so this is never a fixed index list; Master Smith's
+	 * face_fit.py auto_exclude, 2026-10-06). Y grows toward the face (the nose tip is the max); Z is up.
+	 */
+	void ClassifyLandmarks(const TArray<FVector>& L, TArray<int32>& OutEars, TArray<int32>& OutNeck, TArray<int32>& OutSkull)
+	{
+		OutEars.Reset(); OutNeck.Reset(); OutSkull.Reset();
+		if (L.Num() == 0) { return; }
+		float YMax = -UE_BIG_NUMBER;
+		for (const FVector& P : L) { YMax = FMath::Max(YMax, static_cast<float>(P.Y)); }
+		TArray<int32> Behind, Front;
+		for (int32 i = 0; i < L.Num(); ++i)
+		{
+			if (L[i].Y < YMax - 13.8) { Behind.Add(i); }
+			if (L[i].Y > YMax - 6.0) { Front.Add(i); }
+		}
+		float ChinZ = UE_BIG_NUMBER, TopZ = -UE_BIG_NUMBER;
+		for (int32 i : Front) { ChinZ = FMath::Min(ChinZ, static_cast<float>(L[i].Z)); }
+		for (int32 i = 0; i < L.Num(); ++i)
+		{
+			if (L[i].Y > YMax - 5.0) { TopZ = FMath::Max(TopZ, static_cast<float>(L[i].Z)); }
+		}
+		float MaxAbsXBehind = 0.f;
+		for (int32 i : Behind) { MaxAbsXBehind = FMath::Max(MaxAbsXBehind, FMath::Abs(static_cast<float>(L[i].X))); }
+		for (int32 i = 0; i < L.Num(); ++i)
+		{
+			const FVector& P = L[i];
+			if (P.Z < ChinZ - 1.0) { OutNeck.Add(i); }
+			else if (P.Z > TopZ + 1.0) { OutSkull.Add(i); }
+			else if (Behind.Contains(i) && MaxAbsXBehind > KINDA_SMALL_NUMBER && FMath::Abs(static_cast<float>(P.X)) > 0.5f * MaxAbsXBehind)
+			{
+				OutEars.Add(i);
+			}
+		}
+	}
 }
 
 // =====================================================================
@@ -420,12 +527,126 @@ FString UMetaHumanCharacterService::Save(const FString& CharacterPath)
 	{
 		return VmhJson::Error(TEXT("CHARACTER_NOT_FOUND"), Error);
 	}
+	UMetaHumanCharacterEditorSubsystem* Subsystem = GEditor ? GEditor->GetEditorSubsystem<UMetaHumanCharacterEditorSubsystem>() : nullptr;
+	if (Subsystem && Subsystem->IsObjectAddedForEditing(Character))
+	{
+		// a save made in the same call that changed a Creator character can deadlock the editor (sleep-polling
+		// UPackage::Save for async texture synthesis only the game thread advances, 2026-10-06/07); defer it instead.
+		FString ParseErr;
+		TSharedPtr<FJsonObject> Out = VmhJson::Parse(SaveDeferred(CharacterPath, 15.f, 45), ParseErr);
+		if (!Out.IsValid())
+		{
+			Out = VmhJson::Obj();
+		}
+		Out->SetStringField(TEXT("routed"), TEXT("save_deferred (the character is in an edit session)"));
+		return VmhJson::Stringify(Out);
+	}
 	if (!VmhAssets::Save(Character, Error))
 	{
 		return VmhJson::Error(TEXT("SAVE_FAILED"), Error);
 	}
 	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
 	Out->SetStringField(TEXT("character"), Character->GetPathName());
+	return VmhJson::Ok(Out);
+}
+
+FString UMetaHumanCharacterService::SaveDeferred(const FString& CharacterPath, float DelaySeconds, int32 MinFrames)
+{
+	FString Error;
+	UMetaHumanCharacter* Character = LoadCharacter(CharacterPath, Error);
+	if (!Character)
+	{
+		return VmhJson::Error(TEXT("CHARACTER_NOT_FOUND"), Error);
+	}
+	const FString Path = Character->GetPathName();
+	UMetaHumanCharacterEditorSubsystem* Subsystem = GetSubsystem(Error);
+	const bool bWasEditing = Subsystem && Subsystem->IsObjectAddedForEditing(Character);
+	if (bWasEditing)
+	{
+		Subsystem->RemoveObjectToEdit(Character);
+	}
+
+	if (FSaveDeferredState* Old = GPendingSaves.Find(Path))
+	{
+		Old->bActive = false; // the running ticker sees this and drops out on its next tick
+	}
+	FSaveDeferredState& State = GPendingSaves.Add(Path);
+	State.Status = TEXT("pending");
+	State.RequestedAt = NowString();
+	State.StartTime = FPlatformTime::Seconds();
+	State.MinFrames = FMath::Max(1, MinFrames);
+	State.DelaySeconds = FMath::Max(0.f, DelaySeconds);
+	State.bActive = true;
+
+	FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([Path](float) -> bool
+	{
+		FSaveDeferredState* S = GPendingSaves.Find(Path);
+		if (!S || !S->bActive)
+		{
+			return false; // cancelled by a newer save_deferred, or never existed
+		}
+		++S->Ticks;
+		if (S->Ticks < S->MinFrames || (FPlatformTime::Seconds() - S->StartTime) < S->DelaySeconds)
+		{
+			return true; // keep waiting
+		}
+		FString LoadErr;
+		UMetaHumanCharacter* Char = LoadCharacter(Path, LoadErr);
+		UMetaHumanCharacterEditorSubsystem* Sub = GEditor ? GEditor->GetEditorSubsystem<UMetaHumanCharacterEditorSubsystem>() : nullptr;
+		if (Char && Sub && Sub->IsObjectAddedForEditing(Char))
+		{
+			S->Status = TEXT("skipped");
+			S->Error = TEXT("back in an edit session by the time the deferred save ran; call save_deferred again");
+		}
+		else if (Char)
+		{
+			const double Start = FPlatformTime::Seconds();
+			FString SaveErr;
+			const bool bOk = VmhAssets::Save(Char, SaveErr);
+			S->Seconds = FPlatformTime::Seconds() - Start;
+			S->Status = bOk ? TEXT("saved") : TEXT("failed");
+			if (!bOk) { S->Error = SaveErr; }
+		}
+		else
+		{
+			S->Status = TEXT("failed");
+			S->Error = LoadErr;
+		}
+		S->At = NowString();
+		S->bActive = false;
+		return false; // run once
+	}), 0.f);
+
+	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
+	Out->SetStringField(TEXT("character"), Path);
+	Out->SetBoolField(TEXT("was_editing"), bWasEditing);
+	Out->SetStringField(TEXT("status"), TEXT("pending"));
+	Out->SetNumberField(TEXT("after_seconds"), State.DelaySeconds);
+	Out->SetNumberField(TEXT("after_frames"), State.MinFrames);
+	Out->SetStringField(TEXT("hint"), TEXT("poll get_save_status(character_path)"));
+	return VmhJson::Ok(Out);
+}
+
+FString UMetaHumanCharacterService::GetSaveStatus(const FString& CharacterPath)
+{
+	FString Error;
+	UMetaHumanCharacter* Character = LoadCharacter(CharacterPath, Error);
+	const FString Path = Character ? Character->GetPathName() : CharacterPath;
+	const FSaveDeferredState* State = GPendingSaves.Find(Path);
+	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
+	Out->SetStringField(TEXT("character"), Path);
+	if (!State)
+	{
+		Out->SetStringField(TEXT("status"), TEXT("never_requested"));
+		Out->SetBoolField(TEXT("pending"), false);
+		return VmhJson::Ok(Out);
+	}
+	Out->SetStringField(TEXT("status"), State->Status);
+	Out->SetBoolField(TEXT("pending"), State->bActive);
+	Out->SetStringField(TEXT("requested_at"), State->RequestedAt);
+	if (!State->At.IsEmpty()) { Out->SetStringField(TEXT("at"), State->At); }
+	Out->SetNumberField(TEXT("seconds"), State->Seconds);
+	if (!State->Error.IsEmpty()) { Out->SetStringField(TEXT("error"), State->Error); }
 	return VmhJson::Ok(Out);
 }
 
@@ -685,8 +906,12 @@ FString UMetaHumanCharacterService::SetBodyConstraints(const FString& CharacterP
 	}
 
 	TArray<FMetaHumanCharacterBodyConstraint> Constraints = Ctx.Subsystem->GetBodyConstraints(Ctx.Character, false);
+	TMap<FString, float> Before;
+	for (const FMetaHumanCharacterBodyConstraint& C : Constraints) { Before.Add(C.Name.ToString(), C.TargetMeasurement); }
+
 	TArray<FString> Applied;
 	TArray<FString> Unknown;
+	TSet<FString> Named; // the measurements this call names, plus Height: only these end up active
 	for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : Values->Values)
 	{
 		FMetaHumanCharacterBodyConstraint* Found = Constraints.FindByPredicate([&Pair](const FMetaHumanCharacterBodyConstraint& C)
@@ -704,7 +929,7 @@ FString UMetaHumanCharacterService::SetBodyConstraints(const FString& CharacterP
 			Unknown.Add(Pair.Key + TEXT(" (not a number)"));
 			continue;
 		}
-		Found->bIsActive = true;
+		Named.Add(Found->Name.ToString());
 		const bool bIsHeight = Found->Name.ToString().Equals(TEXT("Height"), ESearchCase::IgnoreCase);
 		if (bIsHeight || !bNormalized)
 		{
@@ -723,15 +948,242 @@ FString UMetaHumanCharacterService::SetBodyConstraints(const FString& CharacterP
 		return VmhJson::Error(TEXT("NO_MATCHING_CONSTRAINT"), FString::Printf(TEXT("None of the keys matched a body constraint. Available: %s"), *FString::Join(Names, TEXT(", "))));
 	}
 
+	// activate only the named measurements plus Height; deactivate every other one (pinning every constraint active
+	// blocked a neck change; Height + the named ones worked, MissionCommander r4/r5 2026-10-06/07).
+	Named.Add(TEXT("Height"));
+	for (FMetaHumanCharacterBodyConstraint& C : Constraints)
+	{
+		C.bIsActive = Named.Contains(C.Name.ToString());
+	}
+
 	Ctx.Subsystem->SetBodyConstraints(Ctx.Character, Constraints);
 	Ctx.Subsystem->CommitBodyState(Ctx.Character);
 	ResetNeckToBody(Ctx.Subsystem, Ctx.Character);
 
-	TSharedPtr<FJsonObject> Out = ConstraintsToJson(Ctx.Subsystem->GetBodyConstraints(Ctx.Character, false));
+	// before/after/delta for EVERY measurement, read back from the committed state (a body change often moves more
+	// than the named ones as a side effect, e.g. Shoulder Height +1.4 cm from a neck-only edit, 2026-10-06).
+	const TArray<FMetaHumanCharacterBodyConstraint> After = Ctx.Subsystem->GetBodyConstraints(Ctx.Character, false);
+	TArray<TSharedPtr<FJsonValue>> MeasurementsJson;
+	for (const FMetaHumanCharacterBodyConstraint& C : After)
+	{
+		const FString Name = C.Name.ToString();
+		const float B = Before.Contains(Name) ? Before[Name] : C.TargetMeasurement;
+		TSharedPtr<FJsonObject> M = VmhJson::Obj();
+		M->SetStringField(TEXT("name"), Name);
+		M->SetBoolField(TEXT("active"), C.bIsActive);
+		M->SetNumberField(TEXT("before"), B);
+		M->SetNumberField(TEXT("after"), C.TargetMeasurement);
+		M->SetNumberField(TEXT("delta"), C.TargetMeasurement - B);
+		MeasurementsJson.Add(MakeShared<FJsonValueObject>(M));
+	}
+	TSharedPtr<FJsonObject> Out = ConstraintsToJson(After);
+	Out->SetArrayField(TEXT("measurements"), MeasurementsJson);
 	Out->SetArrayField(TEXT("applied"), VmhJson::StringArray(Applied));
+	Out->SetArrayField(TEXT("active_now"), VmhJson::StringArray(Named.Array()));
 	if (Unknown.Num() > 0)
 	{
 		Out->SetArrayField(TEXT("ignored"), VmhJson::StringArray(Unknown));
+	}
+	return CharacterResult(Ctx, Out);
+}
+
+FString UMetaHumanCharacterService::GetFaceLandmarks(const FString& CharacterPath)
+{
+	FEditContext Ctx = OpenForEdit(CharacterPath, true);
+	if (!Ctx.IsValid())
+	{
+		return Ctx.ToError();
+	}
+	TArray<FVector> Landmarks;
+	Ctx.Subsystem->GetFaceLandmarks(Ctx.Character, Landmarks);
+	if (Landmarks.Num() == 0)
+	{
+		return VmhJson::Error(TEXT("NO_LANDMARKS"), TEXT("get_face_landmarks returned no points"));
+	}
+	TArray<int32> Ears, Neck, Skull;
+	ClassifyLandmarks(Landmarks, Ears, Neck, Skull);
+
+	TSharedPtr<FJsonObject> LandmarksJson = VmhJson::Obj();
+	for (int32 i = 0; i < Landmarks.Num(); ++i)
+	{
+		TArray<TSharedPtr<FJsonValue>> V;
+		V.Add(MakeShared<FJsonValueNumber>(Landmarks[i].X));
+		V.Add(MakeShared<FJsonValueNumber>(Landmarks[i].Y));
+		V.Add(MakeShared<FJsonValueNumber>(Landmarks[i].Z));
+		LandmarksJson->SetArrayField(FString::FromInt(i), V);
+	}
+	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
+	Out->SetNumberField(TEXT("count"), Landmarks.Num());
+	Out->SetObjectField(TEXT("landmarks"), LandmarksJson);
+	Out->SetStringField(TEXT("frame"), TEXT("edit frame, centimetres, +Y toward the face, +Z up"));
+	Out->SetArrayField(TEXT("likely_ears"), IntArray(Ears));
+	Out->SetArrayField(TEXT("likely_neck"), IntArray(Neck));
+	Out->SetArrayField(TEXT("likely_skull"), IntArray(Skull));
+	return CharacterResult(Ctx, Out);
+}
+
+FString UMetaHumanCharacterService::MoveFaceLandmarks(const FString& CharacterPath, const FString& TargetsJson, const FString& HoldJson, float ToleranceCm, int32 MaxIterations, float Gain, bool bAllowEars, bool bAbsolute)
+{
+	FString ParseError;
+	TSharedPtr<FJsonObject> Targets = VmhJson::Parse(TargetsJson, ParseError);
+	if (!Targets.IsValid() || Targets->Values.Num() == 0)
+	{
+		return VmhJson::Error(TEXT("INVALID_JSON"), ParseError.IsEmpty() ? TEXT("TargetsJson must be a non-empty {\"index\":[dx,dy,dz]} object") : ParseError);
+	}
+	FEditContext Ctx = OpenForEdit(CharacterPath, true);
+	if (!Ctx.IsValid())
+	{
+		return Ctx.ToError();
+	}
+	const TArray<FString> Worn = WornGroomSlots(Ctx.Character);
+	if (Worn.Num() > 0)
+	{
+		return VmhJson::Error(TEXT("GROOMS_WORN"), FString::Printf(TEXT("%s wears grooms (%s); spawning the Creator preview with grooms on hung the shared editor for minutes. Clear the groom slots, fit the face, then add grooms back"), *CharacterPath, *FString::Join(Worn, TEXT(", "))));
+	}
+	if (Ctx.Subsystem->GetRiggingState(Ctx.Character) == EMetaHumanCharacterRigState::Rigged)
+	{
+		return VmhJson::Error(TEXT("FACE_RIGGED"), TEXT("the face rig is still on; call remove_face_rig first"));
+	}
+
+	TArray<FVector> L0;
+	Ctx.Subsystem->GetFaceLandmarks(Ctx.Character, L0);
+	if (L0.Num() == 0)
+	{
+		return VmhJson::Error(TEXT("NO_LANDMARKS"), TEXT("get_face_landmarks returned no points"));
+	}
+	TArray<int32> EarIdx, NeckIdx, SkullIdx;
+	ClassifyLandmarks(L0, EarIdx, NeckIdx, SkullIdx);
+	const TSet<int32> Ears(EarIdx);
+
+	TMap<int32, FVector> TargetAbs;
+	TArray<FString> BadIndex, EarRefused;
+	for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : Targets->Values)
+	{
+		const int32 Idx = FCString::Atoi(*Pair.Key);
+		const TArray<TSharedPtr<FJsonValue>>* Arr = nullptr;
+		if (!L0.IsValidIndex(Idx))
+		{
+			BadIndex.Add(Pair.Key + TEXT(" (out of range)"));
+			continue;
+		}
+		if (!Pair.Value->TryGetArray(Arr) || Arr->Num() != 3)
+		{
+			BadIndex.Add(Pair.Key + TEXT(" (expected [dx,dy,dz])"));
+			continue;
+		}
+		if (Ears.Contains(Idx) && !bAllowEars)
+		{
+			EarRefused.Add(Pair.Key);
+			continue;
+		}
+		const FVector V((*Arr)[0]->AsNumber(), (*Arr)[1]->AsNumber(), (*Arr)[2]->AsNumber());
+		TargetAbs.Add(Idx, bAbsolute ? V : L0[Idx] + V);
+	}
+	if (EarRefused.Num() > 0)
+	{
+		return VmhJson::Error(TEXT("EAR_LANDMARKS_REFUSED"), FString::Printf(TEXT("indices %s look like ear landmarks (moving them crumpled MissionCommander's ears, 2026-10-07); pass bAllowEars=true to move them anyway"), *FString::Join(EarRefused, TEXT(", "))));
+	}
+	if (TargetAbs.Num() == 0)
+	{
+		return VmhJson::Error(TEXT("NO_VALID_TARGETS"), FString::Printf(TEXT("no usable targets (bad: %s)"), *FString::Join(BadIndex, TEXT(", "))));
+	}
+	const int32 NumMoveTargets = TargetAbs.Num();
+
+	// holds: every other landmark pinned at its current position ("auto", the default); an explicit index list; or
+	// none held ("none") - only the named targets are driven and nothing else is corrected back.
+	const FString HoldMode = HoldJson.TrimStartAndEnd();
+	TArray<int32> HoldIdx;
+	if (HoldMode.IsEmpty() || HoldMode.Equals(TEXT("auto"), ESearchCase::IgnoreCase))
+	{
+		for (int32 i = 0; i < L0.Num(); ++i)
+		{
+			if (!TargetAbs.Contains(i)) { HoldIdx.Add(i); }
+		}
+	}
+	else if (!HoldMode.Equals(TEXT("none"), ESearchCase::IgnoreCase))
+	{
+		FString WrapErr;
+		TSharedPtr<FJsonObject> Wrapped = VmhJson::Parse(FString::Printf(TEXT("{\"h\":%s}"), *HoldMode), WrapErr);
+		const TArray<TSharedPtr<FJsonValue>>* Arr = nullptr;
+		if (!Wrapped.IsValid() || !Wrapped->TryGetArrayField(TEXT("h"), Arr))
+		{
+			return VmhJson::Error(TEXT("BAD_HOLD"), TEXT("HoldJson must be \"auto\", \"none\" or a JSON array of indices"));
+		}
+		for (const TSharedPtr<FJsonValue>& V : *Arr) { HoldIdx.Add(static_cast<int32>(V->AsNumber())); }
+	}
+	int32 NumHeld = 0;
+	for (int32 i : HoldIdx)
+	{
+		if (L0.IsValidIndex(i) && !TargetAbs.Contains(i))
+		{
+			TargetAbs.Add(i, L0[i]);
+			++NumHeld;
+		}
+	}
+
+	MaxIterations = FMath::Clamp(MaxIterations, 1, 64);
+	ToleranceCm = FMath::Max(0.001f, ToleranceCm);
+	const float Cap = 1.0f; // cm per iteration step (Master Smith's ed_p4_a2_ears_neck.py CAP)
+	TArray<TSharedPtr<FJsonValue>> IterationsLog;
+	float Worst = 0.f;
+	int32 WorstIndex = INDEX_NONE;
+	int32 IterationsRun = 0;
+	for (int32 It = 0; It < MaxIterations; ++It)
+	{
+		TArray<FVector> L;
+		Ctx.Subsystem->GetFaceLandmarks(Ctx.Character, L);
+		Worst = 0.f; WorstIndex = INDEX_NONE;
+		TArray<int32> MoveIdx;
+		TArray<FVector> MoveDelta;
+		for (const TPair<int32, FVector>& Pair : TargetAbs)
+		{
+			const FVector Residual = Pair.Value - L[Pair.Key];
+			const float Mag = Residual.GetAbsMax();
+			if (Mag > Worst) { Worst = Mag; WorstIndex = Pair.Key; }
+			if (Mag >= ToleranceCm * 0.5f)
+			{
+				const float G = Ears.Contains(Pair.Key) ? Gain : 1.f;
+				FVector Ask = Residual * G;
+				Ask.X = FMath::Clamp(Ask.X, -Cap, Cap);
+				Ask.Y = FMath::Clamp(Ask.Y, -Cap, Cap);
+				Ask.Z = FMath::Clamp(Ask.Z, -Cap, Cap);
+				MoveIdx.Add(Pair.Key);
+				MoveDelta.Add(Ask);
+			}
+		}
+		TSharedPtr<FJsonObject> IterRec = VmhJson::Obj();
+		IterRec->SetNumberField(TEXT("worst_cm"), Worst);
+		IterRec->SetNumberField(TEXT("worst_index"), WorstIndex);
+		IterRec->SetNumberField(TEXT("moved"), MoveIdx.Num());
+		IterationsLog.Add(MakeShared<FJsonValueObject>(IterRec));
+		IterationsRun = It + 1;
+		if (Worst < ToleranceCm || MoveIdx.Num() == 0)
+		{
+			break;
+		}
+		Ctx.Subsystem->TranslateFaceLandmarks(Ctx.Character, MoveIdx, MoveDelta);
+		Ctx.Subsystem->CommitFaceState(Ctx.Character);
+	}
+
+	TArray<FVector> LFinal;
+	Ctx.Subsystem->GetFaceLandmarks(Ctx.Character, LFinal);
+	TSharedPtr<FJsonObject> ResidualsFinal = VmhJson::Obj();
+	for (const TPair<int32, FVector>& Pair : TargetAbs)
+	{
+		ResidualsFinal->SetNumberField(FString::FromInt(Pair.Key), (Pair.Value - LFinal[Pair.Key]).GetAbsMax());
+	}
+
+	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
+	Out->SetNumberField(TEXT("targets"), NumMoveTargets);
+	Out->SetNumberField(TEXT("held"), NumHeld);
+	Out->SetNumberField(TEXT("iterations_run"), IterationsRun);
+	Out->SetBoolField(TEXT("converged"), Worst < ToleranceCm);
+	Out->SetNumberField(TEXT("worst_residual_cm"), Worst);
+	Out->SetArrayField(TEXT("iterations"), IterationsLog);
+	Out->SetObjectField(TEXT("final_residuals_cm"), ResidualsFinal);
+	if (BadIndex.Num() > 0)
+	{
+		Out->SetArrayField(TEXT("ignored"), VmhJson::StringArray(BadIndex));
 	}
 	return CharacterResult(Ctx, Out);
 }
@@ -962,6 +1414,22 @@ FString UMetaHumanCharacterService::RemoveFaceRig(const FString& CharacterPath)
 	return CharacterResult(Ctx);
 }
 
+FString UMetaHumanCharacterService::GetAutoRigStatus(const FString& CharacterPath)
+{
+	FEditContext Ctx = OpenForEdit(CharacterPath, false);
+	if (!Ctx.IsValid())
+	{
+		return Ctx.ToError();
+	}
+	const bool bRunning = Ctx.Subsystem->IsAutoRiggingFace(Ctx.Character);
+	const EMetaHumanCharacterRigState RigState = Ctx.Subsystem->GetRiggingState(Ctx.Character);
+	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
+	Out->SetStringField(TEXT("status"), bRunning ? TEXT("running") : (RigState == EMetaHumanCharacterRigState::Rigged ? TEXT("done") : TEXT("failed_or_not_requested")));
+	Out->SetBoolField(TEXT("running"), bRunning);
+	Out->SetBoolField(TEXT("has_face_dna"), Ctx.Character->HasFaceDNA());
+	return CharacterResult(Ctx, Out);
+}
+
 FString UMetaHumanCharacterService::RequestTextureSources(const FString& CharacterPath, bool bBlocking)
 {
 	FEditContext Ctx = OpenForEdit(CharacterPath, true);
@@ -1188,6 +1656,105 @@ FString UMetaHumanCharacterService::Build(const FString& CharacterPath, const FS
 	Out->SetArrayField(TEXT("blueprints"), VmhJson::StringArray(Blueprints));
 	Out->SetStringField(TEXT("hint"), TEXT("Place the Blueprint in a level; its Live Link / animation inputs are on the actor. Save all packages afterwards."));
 	return CharacterResult(Ctx, Out);
+}
+
+FString UMetaHumanCharacterService::BuildAsync(const FString& CharacterPath, const FString& PipelineType, const FString& Quality, const FString& BuildPath, const FString& NameOverride)
+{
+	// validate up front, exactly like build(), so a bad request fails now rather than on the deferred tick
+	const UEnum* PipelineEnum = StaticEnum<EMetaHumanDefaultPipelineType>();
+	const UEnum* QualityEnum = StaticEnum<EMetaHumanQualityLevel>();
+	if (!PipelineType.IsEmpty() && VmhJson::ParseEnum(PipelineEnum, PipelineType) == INDEX_NONE)
+	{
+		return VmhJson::Error(TEXT("BAD_PIPELINE"), FString::Printf(TEXT("PipelineType must be one of: %s"), *VmhJson::EnumNames(PipelineEnum)));
+	}
+	if (!Quality.IsEmpty() && VmhJson::ParseEnum(QualityEnum, Quality) == INDEX_NONE)
+	{
+		return VmhJson::Error(TEXT("BAD_QUALITY"), FString::Printf(TEXT("Quality must be one of: %s"), *VmhJson::EnumNames(QualityEnum)));
+	}
+	FString LoadErr;
+	UMetaHumanCharacter* Character = LoadCharacter(CharacterPath, LoadErr);
+	if (!Character)
+	{
+		return VmhJson::Error(TEXT("CHARACTER_NOT_FOUND"), LoadErr);
+	}
+	FText Reason;
+	UMetaHumanCharacterEditorSubsystem* Subsystem = GEditor ? GEditor->GetEditorSubsystem<UMetaHumanCharacterEditorSubsystem>() : nullptr;
+	if (Subsystem && !Subsystem->CanBuildMetaHuman(Character, Reason))
+	{
+		return VmhJson::Error(TEXT("CANNOT_BUILD"), Reason.ToString());
+	}
+	const FString Path = Character->GetPathName();
+
+	FBuildAsyncState& State = GPendingBuilds.Add(Path);
+	State = FBuildAsyncState();
+	State.OutputFolder = BuildPath.IsEmpty() ? TEXT("/Game/MetaHumans") : BuildPath;
+
+	FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda(
+		[Path, PipelineType, Quality, BuildPath, NameOverride](float) -> bool
+		{
+			FBuildAsyncState* S = GPendingBuilds.Find(Path);
+			if (!S)
+			{
+				return false;
+			}
+			S->Status = TEXT("running");
+			const double Start = FPlatformTime::Seconds();
+			const FString Result = UMetaHumanCharacterService::Build(Path, PipelineType, Quality, BuildPath, NameOverride);
+			S->Seconds = FPlatformTime::Seconds() - Start;
+			FString ParseErr;
+			TSharedPtr<FJsonObject> Parsed = VmhJson::Parse(Result, ParseErr);
+			bool bOk = false;
+			if (Parsed.IsValid())
+			{
+				Parsed->TryGetBoolField(TEXT("success"), bOk);
+			}
+			S->Status = bOk ? TEXT("done") : TEXT("failed");
+			if (Parsed.IsValid())
+			{
+				if (!bOk) { Parsed->TryGetStringField(TEXT("error"), S->Error); }
+				Parsed->TryGetStringField(TEXT("output_folder"), S->OutputFolder);
+				const TArray<TSharedPtr<FJsonValue>>* Arr = nullptr;
+				if (Parsed->TryGetArrayField(TEXT("blueprints"), Arr))
+				{
+					for (const TSharedPtr<FJsonValue>& V : *Arr) { S->Blueprints.Add(V->AsString()); }
+				}
+			}
+			else
+			{
+				S->Error = TEXT("build() returned unparseable JSON");
+			}
+			return false; // run once
+		}), 0.f);
+
+	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
+	Out->SetStringField(TEXT("character"), Path);
+	Out->SetStringField(TEXT("status"), TEXT("queued"));
+	Out->SetStringField(TEXT("hint"), TEXT("poll get_build_status(character_path); the build itself still blocks the game thread for several minutes once it starts"));
+	return VmhJson::Ok(Out);
+}
+
+FString UMetaHumanCharacterService::GetBuildStatus(const FString& CharacterPath)
+{
+	FString LoadErr;
+	UMetaHumanCharacter* Character = LoadCharacter(CharacterPath, LoadErr);
+	const FString Path = Character ? Character->GetPathName() : CharacterPath;
+	const FBuildAsyncState* State = GPendingBuilds.Find(Path);
+	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
+	Out->SetStringField(TEXT("character"), Path);
+	if (!State)
+	{
+		Out->SetStringField(TEXT("status"), TEXT("not_requested"));
+		return VmhJson::Ok(Out);
+	}
+	Out->SetStringField(TEXT("status"), State->Status);
+	Out->SetNumberField(TEXT("seconds"), State->Seconds);
+	Out->SetStringField(TEXT("output_folder"), State->OutputFolder);
+	Out->SetArrayField(TEXT("blueprints"), VmhJson::StringArray(State->Blueprints));
+	if (!State->Error.IsEmpty())
+	{
+		Out->SetStringField(TEXT("error"), State->Error);
+	}
+	return VmhJson::Ok(Out);
 }
 
 FString UMetaHumanCharacterService::SpawnInLevel(const FString& CharacterPath, FVector Location, FRotator Rotation, bool bKeepTransient)
@@ -1948,6 +2515,118 @@ FString UMetaHumanCharacterService::ExportFbx(const FString& AssetPath, const FS
 	return VmhJson::Ok(Out);
 }
 
+FString UMetaHumanCharacterService::ReimportSkeletalMesh(const FString& AssetPath, const FString& FbxPath, bool bKeepMaterials)
+{
+	if (!FPaths::FileExists(FbxPath))
+	{
+		return VmhJson::Error(TEXT("FILE_NOT_FOUND"), FString::Printf(TEXT("No file at %s"), *FbxPath));
+	}
+	USkeletalMesh* Existing = VmhAssets::Load<USkeletalMesh>(AssetPath);
+	if (!Existing)
+	{
+		return VmhJson::Error(TEXT("MESH_NOT_FOUND"), FString::Printf(TEXT("No skeletal mesh at %s"), *AssetPath));
+	}
+	USkeleton* Skeleton = Existing->GetSkeleton();
+	TArray<TPair<FName, FString>> SlotsBefore;
+	for (const FSkeletalMaterial& M : Existing->GetMaterials())
+	{
+		SlotsBefore.Add(TPair<FName, FString>(M.MaterialSlotName, M.MaterialInterface ? M.MaterialInterface->GetPathName() : FString()));
+	}
+	const FBoxSphereBounds BoundsBefore = Existing->GetBounds();
+
+	FString PackagePath, AssetName;
+	VmhAssets::SplitAssetPath(AssetPath, PackagePath, AssetName);
+
+	UFbxImportUI* ImportUI = NewObject<UFbxImportUI>();
+	ImportUI->bImportMesh = true;
+	ImportUI->bImportAsSkeletal = true;
+	ImportUI->MeshTypeToImport = FBXIT_SkeletalMesh;
+	ImportUI->Skeleton = Skeleton;
+	ImportUI->bCreatePhysicsAsset = false;
+	ImportUI->bImportAnimations = false;
+	ImportUI->bImportMaterials = false;
+	ImportUI->bImportTextures = false;
+	if (UFbxSkeletalMeshImportData* SkelData = ImportUI->SkeletalMeshImportData)
+	{
+		SkelData->bConvertScene = true;
+		SkelData->bForceFrontXAxis = false;
+		SkelData->bConvertSceneUnit = false;
+		SkelData->ImportUniformScale = 1.f;
+		SkelData->ImportTranslation = FVector::ZeroVector;
+		SkelData->ImportRotation = FRotator::ZeroRotator;
+		SkelData->bUpdateSkeletonReferencePose = false;
+		SkelData->bUseT0AsRefPose = false;
+		SkelData->bImportMorphTargets = false;
+		SkelData->bImportMeshesInBoneHierarchy = false;
+		SkelData->ImportContentType = EFBXImportContentType::FBXICT_All;
+		SkelData->NormalImportMethod = FBXNIM_ImportNormalsAndTangents;
+	}
+
+	UAssetImportTask* Task = NewObject<UAssetImportTask>();
+	Task->Filename = FbxPath;
+	Task->DestinationPath = PackagePath;
+	Task->DestinationName = AssetName;
+	Task->bReplaceExisting = true;
+	Task->bAutomated = true;
+	Task->bSave = false;
+	Task->Options = ImportUI;
+	FAssetToolsModule::GetModule().Get().ImportAssetTasks({ Task });
+
+	USkeletalMesh* Reimported = VmhAssets::Load<USkeletalMesh>(AssetPath);
+	if (!Reimported)
+	{
+		return VmhJson::Error(TEXT("REIMPORT_FAILED"), FString::Printf(TEXT("no skeletal mesh came out of %s (see the Output Log)"), *FbxPath));
+	}
+	if (Reimported->GetSkeleton() != Skeleton)
+	{
+		return VmhJson::Error(TEXT("SKELETON_MISMATCH"), TEXT("the reimported mesh is on a different skeleton than the one it replaced; the Blueprint would stop following the body's pose"));
+	}
+
+	TArray<FString> MaterialsRestored;
+	if (bKeepMaterials)
+	{
+		TMap<FName, FString> ByName;
+		for (const TPair<FName, FString>& S : SlotsBefore)
+		{
+			if (!S.Value.IsEmpty()) { ByName.Add(S.Key, S.Value); }
+		}
+		for (FSkeletalMaterial& M : Reimported->GetMaterials())
+		{
+			if (const FString* Path = ByName.Find(M.MaterialSlotName))
+			{
+				if (UMaterialInterface* Mat = VmhAssets::Load<UMaterialInterface>(*Path))
+				{
+					M.MaterialInterface = Mat;
+					MaterialsRestored.Add(M.MaterialSlotName.ToString());
+				}
+			}
+		}
+	}
+	Reimported->MarkPackageDirty();
+
+	TArray<TSharedPtr<FJsonValue>> SlotsBeforeJson, SlotsAfterJson;
+	for (const TPair<FName, FString>& S : SlotsBefore)
+	{
+		SlotsBeforeJson.Add(MakeShared<FJsonValueArray>(TArray<TSharedPtr<FJsonValue>>{ MakeShared<FJsonValueString>(S.Key.ToString()), MakeShared<FJsonValueString>(S.Value) }));
+	}
+	for (const FSkeletalMaterial& M : Reimported->GetMaterials())
+	{
+		SlotsAfterJson.Add(MakeShared<FJsonValueArray>(TArray<TSharedPtr<FJsonValue>>{ MakeShared<FJsonValueString>(M.MaterialSlotName.ToString()), MakeShared<FJsonValueString>(M.MaterialInterface ? M.MaterialInterface->GetPathName() : FString()) }));
+	}
+	const FBoxSphereBounds BoundsAfter = Reimported->GetBounds();
+
+	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
+	Out->SetStringField(TEXT("skeletal_mesh"), Reimported->GetPathName());
+	Out->SetStringField(TEXT("fbx"), FbxPath);
+	Out->SetStringField(TEXT("skeleton"), Skeleton ? Skeleton->GetPathName() : TEXT(""));
+	Out->SetArrayField(TEXT("slots_before"), SlotsBeforeJson);
+	Out->SetArrayField(TEXT("slots_after"), SlotsAfterJson);
+	Out->SetArrayField(TEXT("materials_restored"), VmhJson::StringArray(MaterialsRestored));
+	Out->SetStringField(TEXT("bounds_before_extent_cm"), BoundsBefore.BoxExtent.ToString());
+	Out->SetStringField(TEXT("bounds_after_extent_cm"), BoundsAfter.BoxExtent.ToString());
+	return VmhJson::Ok(Out);
+}
+
 FString UMetaHumanCharacterService::ImportTexture(const FString& FilePath, const FString& PackagePath, const FString& AssetName, const FString& Kind, bool bFlipGreen)
 {
 	if (!FPaths::FileExists(FilePath))
@@ -2001,15 +2680,35 @@ FString UMetaHumanCharacterService::ImportTexture(const FString& FilePath, const
 		Texture->bFlipGreenChannel = true;
 	}
 	Texture->PostEditChange();
-	Texture->MarkPackageDirty();
+
+	// finish compiling and check it actually built, before marking the package dirty (2026-10-07): after long editor
+	// sessions the texture pipeline stalls and a fresh import comes back a 32x32 placeholder with no miplevels
+	// ("contains no miplevels" in the Output Log) - it rendered a face white, and the next save of any material
+	// instance that uses it hangs in SavePackage. Restart the editor rather than using a texture that built this way.
+	FTextureCompilingManager::Get().FinishCompilation({ Texture });
+	const int32 W = Texture->GetSizeX();
+	const int32 H = Texture->GetSizeY();
+	const int64 SrcW = Texture->Source.GetSizeX();
+	const int64 SrcH = Texture->Source.GetSizeY();
+	const int32 NumMips = Texture->GetPlatformData() ? Texture->GetPlatformData()->Mips.Num() : 0;
+	// the built size must match what was actually imported (SrcW/H, from the PNG/TGA/EXR on disk): a stalled
+	// pipeline builds a 32x32 placeholder regardless of the source's real size, so comparing to a fixed size
+	// threshold alone would also flag a deliberately tiny texture. No miplevels at all is always a failure.
+	const bool bPlaceholder = NumMips == 0 || (SrcW > 0 && SrcH > 0 && (W != SrcW || H != SrcH));
 
 	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
 	Out->SetStringField(TEXT("texture"), Texture->GetPathName());
-	Out->SetNumberField(TEXT("width"), Texture->GetSizeX());
-	Out->SetNumberField(TEXT("height"), Texture->GetSizeY());
+	Out->SetNumberField(TEXT("width"), W);
+	Out->SetNumberField(TEXT("height"), H);
+	Out->SetNumberField(TEXT("mip_count"), NumMips);
 	Out->SetBoolField(TEXT("srgb"), Texture->SRGB);
 	Out->SetStringField(TEXT("compression"), StaticEnum<TextureCompressionSettings>()->GetNameStringByValue(static_cast<int64>(Texture->CompressionSettings)));
 	Out->SetBoolField(TEXT("flip_green"), bNormal && bFlipGreen);
+	if (bPlaceholder)
+	{
+		return VmhJson::Error(TEXT("IMPORT_INCOMPLETE"), FString::Printf(TEXT("%s built as %dx%d with %d miplevels but the source image is %lldx%lld; restart the editor before using it on any material instance"), *Texture->GetPathName(), W, H, NumMips, SrcW, SrcH), Out);
+	}
+	Texture->MarkPackageDirty();
 	return VmhJson::Ok(Out);
 }
 
@@ -2196,5 +2895,287 @@ FString UMetaHumanCharacterService::AttachStaticMeshToBlueprint(const FString& B
 	Out->SetStringField(TEXT("relative_rotation"), RelativeRotation.ToString());
 	Out->SetBoolField(TEXT("compiled"), Blueprint->Status != BS_Error);
 	Out->SetStringField(TEXT("hint"), TEXT("a placed instance made before this call keeps its old components: respawn it; save the Blueprint's package when it should stay"));
+	return VmhJson::Ok(Out);
+}
+
+FString UMetaHumanCharacterService::RemoveComponentFromBlueprint(const FString& BlueprintPath, const FString& ComponentName)
+{
+	UBlueprint* Blueprint = VmhAssets::Load<UBlueprint>(BlueprintPath);
+	if (!Blueprint || !Blueprint->SimpleConstructionScript)
+	{
+		return VmhJson::Error(TEXT("BLUEPRINT_NOT_FOUND"), FString::Printf(TEXT("No Blueprint with a construction script at %s"), *BlueprintPath));
+	}
+	USimpleConstructionScript* SCS = Blueprint->SimpleConstructionScript;
+	USCS_Node* Node = SCS->FindSCSNode(FName(*ComponentName));
+	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
+	Out->SetStringField(TEXT("blueprint"), Blueprint->GetPathName());
+	Out->SetStringField(TEXT("component"), ComponentName);
+	if (!Node)
+	{
+		Out->SetBoolField(TEXT("removed"), false);
+		Out->SetStringField(TEXT("hint"), TEXT("no such component (already removed, or never added)"));
+		return VmhJson::Ok(Out);
+	}
+	SCS->RemoveNodeAndPromoteChildren(Node);
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+	FKismetEditorUtilities::CompileBlueprint(Blueprint, EBlueprintCompileOptions::SkipGarbageCollection);
+	Blueprint->MarkPackageDirty();
+	Out->SetBoolField(TEXT("removed"), true);
+	Out->SetBoolField(TEXT("compiled"), Blueprint->Status != BS_Error);
+	return VmhJson::Ok(Out);
+}
+
+// =====================================================================
+// Hair (2026-10-07)
+// =====================================================================
+
+FString UMetaHumanCharacterService::ListWardrobeItems(const FString& SlotName)
+{
+	const FString Root = SlotName.IsEmpty() ? TEXT("/MetaHumanCharacter/Optional/Grooms/Bindings") : (TEXT("/MetaHumanCharacter/Optional/Grooms/Bindings/") + SlotName);
+	TArray<FString> Paths = VmhAssets::FindAssetsOfClass(TEXT("/Script/MetaHumanCharacterPalette.MetaHumanWardrobeItem"), Root, false);
+	TArray<TSharedPtr<FJsonValue>> Items;
+	for (const FString& Path : Paths)
+	{
+		UMetaHumanWardrobeItem* Item = VmhAssets::Load<UMetaHumanWardrobeItem>(Path);
+		if (!Item)
+		{
+			continue;
+		}
+		TSharedPtr<FJsonObject> Rec = VmhJson::Obj();
+		Rec->SetStringField(TEXT("path"), Item->GetPathName());
+		Rec->SetStringField(TEXT("name"), Item->GetName());
+		FString Left, Right;
+		if (Path.Split(TEXT("/Bindings/"), &Left, &Right))
+		{
+			FString Slot;
+			Right.Split(TEXT("/"), &Slot, nullptr);
+			Rec->SetStringField(TEXT("slot"), Slot);
+		}
+		Items.Add(MakeShared<FJsonValueObject>(Rec));
+	}
+	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
+	Out->SetStringField(TEXT("root"), Root);
+	Out->SetNumberField(TEXT("count"), Items.Num());
+	Out->SetArrayField(TEXT("items"), Items);
+	return VmhJson::Ok(Out);
+}
+
+FString UMetaHumanCharacterService::AddGroomToBlueprint(const FString& BlueprintPath, const FString& ComponentName, const FString& GroomAssetPath, const FString& TargetComponent, const FString& MaterialFromComponent, bool bSaveBinding)
+{
+	UBlueprint* Blueprint = VmhAssets::Load<UBlueprint>(BlueprintPath);
+	if (!Blueprint || !Blueprint->SimpleConstructionScript)
+	{
+		return VmhJson::Error(TEXT("BLUEPRINT_NOT_FOUND"), FString::Printf(TEXT("No Blueprint with a construction script at %s"), *BlueprintPath));
+	}
+	if (ComponentName.IsEmpty())
+	{
+		return VmhJson::Error(TEXT("BAD_ARGS"), TEXT("ComponentName is required"));
+	}
+	USimpleConstructionScript* SCS = Blueprint->SimpleConstructionScript;
+	const FString Parent = TargetComponent.IsEmpty() ? TEXT("Face") : TargetComponent;
+	USCS_Node* ParentNode = SCS->FindSCSNode(FName(*Parent));
+	if (!ParentNode)
+	{
+		TArray<FString> Names;
+		for (USCS_Node* Node : SCS->GetAllNodes()) { Names.Add(Node->GetVariableName().ToString()); }
+		return VmhJson::Error(TEXT("PARENT_NOT_FOUND"), FString::Printf(TEXT("%s has no component %s; it has: %s"), *BlueprintPath, *Parent, *FString::Join(Names, TEXT(", "))));
+	}
+
+	UObject* Loaded = VmhAssets::Load(GroomAssetPath);
+	if (!Loaded)
+	{
+		return VmhJson::Error(TEXT("GROOM_NOT_FOUND"), FString::Printf(TEXT("No asset at %s"), *GroomAssetPath));
+	}
+	UGroomAsset* Groom = Cast<UGroomAsset>(Loaded);
+	UGroomBindingAsset* PluginBinding = Cast<UGroomBindingAsset>(Loaded);
+	FString StyleName;
+	if (UMetaHumanWardrobeItem* WI = Cast<UMetaHumanWardrobeItem>(Loaded))
+	{
+		FString Folder, Leaf;
+		WI->GetPathName().Split(TEXT("/"), &Folder, &Leaf, ESearchCase::IgnoreCase, ESearchDir::FromEnd);
+		Leaf.Split(TEXT("."), &Leaf, nullptr); // "WI_Hair_M_FauxMohawk.WI_Hair_M_FauxMohawk" -> "WI_Hair_M_FauxMohawk"
+		StyleName = Leaf;
+		StyleName.RemoveFromStart(TEXT("WI_"));
+		const FString BindingPath = Folder / (StyleName + TEXT("_Binding"));
+		PluginBinding = VmhAssets::Load<UGroomBindingAsset>(BindingPath);
+		if (!PluginBinding)
+		{
+			return VmhJson::Error(TEXT("BINDING_NOT_FOUND"), FString::Printf(TEXT("No plugin binding at %s for wardrobe item %s"), *BindingPath, *GroomAssetPath));
+		}
+	}
+	if (PluginBinding)
+	{
+		Groom = PluginBinding->GetGroom();
+	}
+	if (!Groom)
+	{
+		return VmhJson::Error(TEXT("GROOM_NOT_FOUND"), FString::Printf(TEXT("%s has no groom asset (a wardrobe item, a GroomBindingAsset, or a bare GroomAsset is expected)"), *GroomAssetPath));
+	}
+
+	// duplicate the plugin's binding into the Blueprint's own folder and retarget it onto the built face mesh: the
+	// same recipe Build()'s own groom pipeline uses (MetaHumanGroomEditorPipeline.cpp ProcessSkeletalMeshes -
+	// DuplicateObject, SetTargetSkeletalMesh, let the async RBF rebuild run - DrHart's HairTop groom, 2026-10-07).
+	UGroomBindingAsset* BindingToUse = nullptr;
+	FString BindingPathUsed;
+	bool bDuplicated = false;
+	if (PluginBinding)
+	{
+		USkeletalMeshComponent* ParentSkel = Cast<USkeletalMeshComponent>(ParentNode->ComponentTemplate);
+		USkeletalMesh* TargetFace = ParentSkel ? ParentSkel->GetSkeletalMeshAsset() : nullptr;
+		if (!TargetFace)
+		{
+			return VmhJson::Error(TEXT("NO_TARGET_MESH"), FString::Printf(TEXT("%s's %s component has no skeletal mesh set yet; build the character first"), *BlueprintPath, *Parent));
+		}
+		if (StyleName.IsEmpty())
+		{
+			StyleName = PluginBinding->GetName();
+			StyleName.RemoveFromEnd(TEXT("_Binding"));
+		}
+		const FString DestFolder = FPaths::GetPath(BlueprintPath) / TEXT("Accessories") / ComponentName;
+		BindingPathUsed = DestFolder / (StyleName + TEXT("_Binding_") + Blueprint->GetName());
+		BindingToUse = VmhAssets::Load<UGroomBindingAsset>(BindingPathUsed);
+		if (!BindingToUse)
+		{
+			FString DupPackage, DupName;
+			VmhAssets::SplitAssetPath(BindingPathUsed, DupPackage, DupName);
+			BindingToUse = Cast<UGroomBindingAsset>(FAssetToolsModule::GetModule().Get().DuplicateAsset(DupName, DupPackage, PluginBinding));
+			bDuplicated = true;
+		}
+		if (!BindingToUse)
+		{
+			return VmhJson::Error(TEXT("DUPLICATE_FAILED"), FString::Printf(TEXT("could not duplicate the plugin binding to %s"), *BindingPathUsed));
+		}
+		if (BindingToUse->GetTargetSkeletalMesh() != TargetFace)
+		{
+			BindingToUse->SetTargetSkeletalMesh(TargetFace); // kicks the async RBF rebuild (PostEditChange)
+		}
+	}
+
+	if (USCS_Node* Old = SCS->FindSCSNode(FName(*ComponentName)))
+	{
+		SCS->RemoveNodeAndPromoteChildren(Old);
+	}
+	USCS_Node* Node = SCS->CreateNode(UGroomComponent::StaticClass(), FName(*ComponentName));
+	UGroomComponent* Template = Cast<UGroomComponent>(Node->ComponentTemplate);
+	if (!Template)
+	{
+		return VmhJson::Error(TEXT("NODE_FAILED"), TEXT("the construction script made no GroomComponent template"));
+	}
+	Template->GroomAsset = Groom;
+	if (BindingToUse)
+	{
+		Template->BindingAsset = BindingToUse;
+	}
+	ParentNode->AddChildNode(Node);
+
+	TArray<FString> MaterialsCopied;
+	if (!MaterialFromComponent.IsEmpty())
+	{
+		if (USCS_Node* SourceNode = SCS->FindSCSNode(FName(*MaterialFromComponent)))
+		{
+			if (UGroomComponent* SourceGroom = Cast<UGroomComponent>(SourceNode->ComponentTemplate))
+			{
+				const TArray<FName> SrcSlots = SourceGroom->GetMaterialSlotNames();
+				const TArray<FName> DstSlots = Template->GetMaterialSlotNames();
+				for (int32 i = 0; i < DstSlots.Num(); ++i)
+				{
+					int32 SrcIndex = SrcSlots.IndexOfByKey(DstSlots[i]);
+					if (SrcIndex == INDEX_NONE && SrcSlots.IsValidIndex(i))
+					{
+						SrcIndex = i; // positional fallback when the slot names do not line up
+					}
+					if (SrcIndex != INDEX_NONE)
+					{
+						if (UMaterialInterface* Mat = SourceGroom->GetMaterial(SrcIndex))
+						{
+							Template->SetMaterial(i, Mat);
+							MaterialsCopied.Add(DstSlots[i].ToString());
+						}
+					}
+				}
+			}
+		}
+	}
+
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+	FKismetEditorUtilities::CompileBlueprint(Blueprint, EBlueprintCompileOptions::SkipGarbageCollection);
+	Blueprint->MarkPackageDirty();
+
+	bool bBindingSaved = false;
+	if (bSaveBinding && BindingToUse)
+	{
+		FString SaveErr;
+		bBindingSaved = VmhAssets::Save(BindingToUse, SaveErr);
+	}
+
+	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
+	Out->SetStringField(TEXT("blueprint"), Blueprint->GetPathName());
+	Out->SetStringField(TEXT("component"), ComponentName);
+	Out->SetStringField(TEXT("parent"), Parent);
+	Out->SetStringField(TEXT("groom"), Groom->GetPathName());
+	Out->SetStringField(TEXT("binding"), BindingToUse ? BindingToUse->GetPathName() : TEXT(""));
+	Out->SetBoolField(TEXT("binding_duplicated"), bDuplicated);
+	Out->SetBoolField(TEXT("binding_saved"), bBindingSaved);
+	Out->SetArrayField(TEXT("material_slots"), VmhJson::NameArray(Template->GetMaterialSlotNames()));
+	Out->SetArrayField(TEXT("materials_copied"), VmhJson::StringArray(MaterialsCopied));
+	Out->SetBoolField(TEXT("compiled"), Blueprint->Status != BS_Error);
+	Out->SetStringField(TEXT("hint"), TEXT("a groom binding builds asynchronously; if bSaveBinding was false, wait at least a minute before saving it yourself (a save mid-build can hang the editor), and never spawn a preview of a character wearing grooms before the face is finished sculpting"));
+	return VmhJson::Ok(Out);
+}
+
+FString UMetaHumanCharacterService::ImportGroom(const FString& AlembicPath, const FString& PackagePath, const FString& AssetName)
+{
+	if (!FPaths::FileExists(AlembicPath))
+	{
+		return VmhJson::Error(TEXT("FILE_NOT_FOUND"), FString::Printf(TEXT("No file at %s"), *AlembicPath));
+	}
+	if (PackagePath.IsEmpty() || AssetName.IsEmpty())
+	{
+		return VmhJson::Error(TEXT("BAD_ARGS"), TEXT("PackagePath and AssetName are required"));
+	}
+	UAssetImportTask* Task = NewObject<UAssetImportTask>();
+	Task->Filename = AlembicPath;
+	Task->DestinationPath = PackagePath;
+	Task->DestinationName = AssetName;
+	Task->bAutomated = true; // UHairStrandsFactory::FactoryCreateFile skips its options dialog when automated
+	Task->bReplaceExisting = true;
+	Task->bSave = false;
+	FAssetToolsModule::GetModule().Get().ImportAssetTasks({ Task });
+
+	UGroomAsset* Groom = nullptr;
+	for (UObject* Object : Task->GetObjects())
+	{
+		Groom = Cast<UGroomAsset>(Object);
+		if (Groom) break;
+	}
+	if (!Groom)
+	{
+		Groom = VmhAssets::Load<UGroomAsset>(PackagePath / AssetName);
+	}
+	if (!Groom)
+	{
+		return VmhJson::Error(TEXT("IMPORT_FAILED"), FString::Printf(TEXT("no groom came out of %s (see the Output Log; .abc guides/strands only)"), *AlembicPath));
+	}
+	Groom->MarkPackageDirty();
+
+	TArray<TSharedPtr<FJsonValue>> Groups;
+	int32 TotalCurves = 0, TotalGuides = 0;
+	for (const FHairGroupInfoWithVisibility& Info : Groom->GetHairGroupsInfo())
+	{
+		TSharedPtr<FJsonObject> G = VmhJson::Obj();
+		G->SetNumberField(TEXT("group_id"), Info.GroupID);
+		G->SetNumberField(TEXT("curves"), Info.NumCurves);
+		G->SetNumberField(TEXT("guides"), Info.NumGuides);
+		TotalCurves += Info.NumCurves;
+		TotalGuides += Info.NumGuides;
+		Groups.Add(MakeShared<FJsonValueObject>(G));
+	}
+
+	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
+	Out->SetStringField(TEXT("groom"), Groom->GetPathName());
+	Out->SetArrayField(TEXT("groups"), Groups);
+	Out->SetNumberField(TEXT("total_curves"), TotalCurves);
+	Out->SetNumberField(TEXT("total_guides"), TotalGuides);
+	Out->SetStringField(TEXT("hint"), TEXT("no plugin binding exists for a custom groom: add_groom_to_blueprint falls back to an unbound GroomComponent for it (no RBF transfer onto the face)"));
 	return VmhJson::Ok(Out);
 }
