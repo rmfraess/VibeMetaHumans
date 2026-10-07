@@ -32,6 +32,8 @@
 #include "Factories/FbxSkeletalMeshImportData.h"
 #include "Factories/TextureFactory.h"
 #include "GroomAsset.h"
+#include "Engine/SkeletalMeshSocket.h"
+#include "HairStrandsFactory.h"
 #include "GroomBindingAsset.h"
 #include "GroomComponent.h"
 #include "HAL/FileManager.h"
@@ -2989,7 +2991,7 @@ FString UMetaHumanCharacterService::ListWardrobeItems(const FString& SlotName)
 	return VmhJson::Ok(Out);
 }
 
-FString UMetaHumanCharacterService::AddGroomToBlueprint(const FString& BlueprintPath, const FString& ComponentName, const FString& GroomAssetPath, const FString& TargetComponent, const FString& MaterialFromComponent, bool bSaveBinding)
+FString UMetaHumanCharacterService::AddGroomToBlueprint(const FString& BlueprintPath, const FString& ComponentName, const FString& GroomAssetPath, const FString& TargetComponent, const FString& MaterialFromComponent, bool bSaveBinding, const FString& SocketName, bool bInverseSocketTransform, FVector RelativeLocation, FRotator RelativeRotation)
 {
 	UBlueprint* Blueprint = VmhAssets::Load<UBlueprint>(BlueprintPath);
 	if (!Blueprint || !Blueprint->SimpleConstructionScript)
@@ -3095,6 +3097,50 @@ FString UMetaHumanCharacterService::AddGroomToBlueprint(const FString& Blueprint
 	{
 		Template->BindingAsset = BindingToUse;
 	}
+	// a bone/socket of the parent mesh: a custom groom with no binding rides it rigidly (2026-10-07)
+	FTransform SocketInverse = FTransform::Identity;
+	bool bSocketFound = false;
+	if (!SocketName.IsEmpty())
+	{
+		USkeletalMeshComponent* ParentSkel = Cast<USkeletalMeshComponent>(ParentNode->ComponentTemplate);
+		USkeletalMesh* ParentMesh = ParentSkel ? ParentSkel->GetSkeletalMeshAsset() : nullptr;
+		if (ParentMesh)
+		{
+			const FReferenceSkeleton& Ref = ParentMesh->GetRefSkeleton();
+			int32 BoneIndex = Ref.FindBoneIndex(FName(*SocketName));
+			FTransform Local = FTransform::Identity;
+			if (BoneIndex == INDEX_NONE)
+			{
+				if (USkeletalMeshSocket* Sock = ParentMesh->FindSocket(FName(*SocketName)))
+				{
+					BoneIndex = Ref.FindBoneIndex(Sock->BoneName);
+					Local = Sock->GetSocketLocalTransform();
+				}
+			}
+			if (BoneIndex != INDEX_NONE)
+			{
+				FTransform CS = Local;
+				for (int32 B = BoneIndex; B != INDEX_NONE; B = Ref.GetParentIndex(B))
+				{
+					CS = CS * Ref.GetRefBonePose()[B];
+				}
+				SocketInverse = CS.Inverse();
+				bSocketFound = true;
+			}
+		}
+		if (!bSocketFound)
+		{
+			return VmhJson::Error(TEXT("SOCKET_NOT_FOUND"), FString::Printf(TEXT("%s's %s mesh has no bone or socket %s"), *BlueprintPath, *Parent, *SocketName));
+		}
+		Node->AttachToName = FName(*SocketName);
+	}
+	FTransform Rel(RelativeRotation, RelativeLocation);
+	if (bInverseSocketTransform)
+	{
+		Rel = Rel * SocketInverse;
+	}
+	Template->SetRelativeLocation_Direct(Rel.GetLocation());
+	Template->SetRelativeRotation_Direct(Rel.Rotator());
 	ParentNode->AddChildNode(Node);
 
 	TArray<FString> MaterialsCopied;
@@ -3142,6 +3188,9 @@ FString UMetaHumanCharacterService::AddGroomToBlueprint(const FString& Blueprint
 	Out->SetStringField(TEXT("component"), ComponentName);
 	Out->SetStringField(TEXT("parent"), Parent);
 	Out->SetStringField(TEXT("groom"), Groom->GetPathName());
+	Out->SetStringField(TEXT("socket"), SocketName);
+	Out->SetStringField(TEXT("relative_location"), Template->GetRelativeLocation().ToString());
+	Out->SetStringField(TEXT("relative_rotation"), Template->GetRelativeRotation().ToString());
 	Out->SetStringField(TEXT("binding"), BindingToUse ? BindingToUse->GetPathName() : TEXT(""));
 	Out->SetBoolField(TEXT("binding_duplicated"), bDuplicated);
 	Out->SetBoolField(TEXT("binding_saved"), bBindingSaved);
@@ -3169,6 +3218,10 @@ FString UMetaHumanCharacterService::ImportGroom(const FString& AlembicPath, cons
 	Task->bAutomated = true; // UHairStrandsFactory::FactoryCreateFile skips its options dialog when automated
 	Task->bReplaceExisting = true;
 	Task->bSave = false;
+	// the hair factory named explicitly: left to choose, the static-mesh AlembicImportFactory claimed a Blender groom
+	// .abc and made nothing (2026-10-07). It reads .abc only when the Alembic Groom Importer plugin is on (this
+	// plugin's .uplugin enables it): without it the factory answered "Unknown extension 'abc'".
+	Task->Factory = NewObject<UHairStrandsFactory>();
 	FAssetToolsModule::GetModule().Get().ImportAssetTasks({ Task });
 
 	UGroomAsset* Groom = nullptr;

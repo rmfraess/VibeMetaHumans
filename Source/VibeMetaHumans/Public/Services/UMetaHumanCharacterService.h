@@ -368,9 +368,15 @@ public:
 	 * then by position). bSaveBinding saves the duplicated binding (wait at least a minute after this call if you
 	 * set it false and save it yourself - a save mid-build can hang the editor). No Blueprint save here either; the
 	 * caller saves it once satisfied.
-	 */
+	 *
+	 * SocketName attaches the groom to a bone/socket of TargetComponent (a custom groom with no binding rides it rigidly:
+	 * binding 40000 Blender strands to DrHart's face mesh kept 12 cores busy for 16+ minutes, 2026-10-07).
+	 * bInverseSocketTransform: the relative transform is the inverse of that bone's reference-pose component transform,
+	 * so a groom authored in the mesh's component space (out/_HairTools exports) lands where it was authored;
+	 * RelativeLocation/RelativeRotation are applied on top. */
 	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
-	static FString AddGroomToBlueprint(const FString& BlueprintPath, const FString& ComponentName, const FString& GroomAssetPath, const FString& TargetComponent = TEXT("Face"), const FString& MaterialFromComponent = TEXT(""), bool bSaveBinding = true);
+	static FString AddGroomToBlueprint(const FString& BlueprintPath, const FString& ComponentName, const FString& GroomAssetPath, const FString& TargetComponent = TEXT("Face"), const FString& MaterialFromComponent = TEXT(""), bool bSaveBinding = true,
+		const FString& SocketName = TEXT(""), bool bInverseSocketTransform = false, FVector RelativeLocation = FVector::ZeroVector, FRotator RelativeRotation = FRotator::ZeroRotator);
 
 	/** Import a groom from an Alembic (.abc) file (guides/strands) as a UGroomAsset: UGroomImportOptions / AssetImportTask, automated (no dialog). Reports each group's strand/guide counts. */
 	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")

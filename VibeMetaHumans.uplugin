@@ -40,6 +40,7 @@
 		{ "Name": "MetaHumanLiveLink", "Enabled": true },
 		{ "Name": "LiveLink", "Enabled": true },
 		{ "Name": "HairStrands", "Enabled": true },
+		{ "Name": "AlembicHairImporter", "Enabled": true },
 		{ "Name": "Takes", "Enabled": true },
 		{ "Name": "LevelSequenceEditor", "Enabled": true },
 		{ "Name": "CaptureManagerEditor", "Enabled": true, "Optional": true },
