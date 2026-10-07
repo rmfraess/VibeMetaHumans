@@ -235,10 +235,11 @@ mh.save(c); mh.end_edit(c)
 - `get_summary(c)` is the cheap read: rig state, DNA/texture flags, body type, skin/eye tone,
   active constraints, wardrobe selections.
 - Body constraints are rejected on a fixed body type (`FIXED_BODY`); switch to `BlendableBody` first.
-- `set_body_constraints` activates ONLY the measurements you name plus `Height`, deactivating every
-  other one (2026-10-07 fix): earlier, a constraint active from an unrelated earlier call stayed
-  active and pinning every constraint active at once blocked a later change entirely (a neck widen
-  did nothing until only `Height` + `Neck` + `Neck Base` were active). The values must still be
+- `set_body_constraints(c, values, normalized, only_named=False)` activates the measurements you name;
+  the others keep their active flag, so a later body-shape or height call does not switch off a neck an
+  earlier call widened. Pass `only_named=True` to leave only the named ones plus `Height` active: pinning
+  every constraint active blocked a neck widen entirely (it did nothing until only `Height` + `Neck` +
+  `Neck Base` were active, MissionCommander 2026-10-07). When going through the raw subsystem, the values must still be
   `.copy()`'d and passed back as a whole array in Python - editing `get_body_constraints`' items in
   place and expecting the subsystem to see it does nothing. The result's `measurements` array gives
   `name/active/before/after/delta` for EVERY measurement, not just the ones you named, because a body

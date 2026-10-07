@@ -110,10 +110,13 @@ public:
 	/**
 	 * Set body constraints from JSON {"Height":182,"Fat":0.3,"Muscularity":0.7,"Masculine/Feminine":0.2,...}.
 	 * Height is in cm; other values are 0..1 normalised across the constraint's range unless bNormalized is
-	 * false (raw measurements). Commits the body and re-aligns the neck.
+	 * false (raw measurements). The named measurements become active; the others keep their active flag, unless
+	 * bOnlyNamed, which leaves only the named ones plus Height active (a neck widening that the other active
+	 * measurements blocked needs that). Commits the body, re-aligns the neck, and returns before/after/delta for
+	 * every measurement (a change to one moves others: Neck +4 cm raised Shoulder Height 1.4 cm).
 	 */
 	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
-	static FString SetBodyConstraints(const FString& CharacterPath, const FString& ValuesJson, bool bNormalized = true);
+	static FString SetBodyConstraints(const FString& CharacterPath, const FString& ValuesJson, bool bNormalized = true, bool bOnlyNamed = false);
 
 	/** Face model (sculpt) landmarks: index -> [x,y,z] cm in the edit frame, plus likely_ears/likely_neck/likely_skull
 	 * indices guessed from their positions (the landmark SET differs per preset, so this is never a fixed index list). */

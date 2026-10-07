@@ -280,8 +280,10 @@ namespace
 		int32 MinFrames = 45;
 		float DelaySeconds = 15.f;
 		bool bActive = true;
+		uint64 Generation = 0; // which save_deferred call owns the state: an older ticker sees a newer generation and drops out
 	};
 	TMap<FString, FSaveDeferredState> GPendingSaves;
+	uint64 GSaveGeneration = 0;
 
 	struct FBuildAsyncState
 	{
@@ -566,24 +568,25 @@ FString UMetaHumanCharacterService::SaveDeferred(const FString& CharacterPath, f
 		Subsystem->RemoveObjectToEdit(Character);
 	}
 
-	if (FSaveDeferredState* Old = GPendingSaves.Find(Path))
-	{
-		Old->bActive = false; // the running ticker sees this and drops out on its next tick
-	}
+	// a newer request replaces the state in place (TMap::Add on an existing key reuses its slot, so a flag set on the old
+	// state would be overwritten): each request takes a new generation and an older ticker drops out when it sees it
 	FSaveDeferredState& State = GPendingSaves.Add(Path);
+	State = FSaveDeferredState();
+	State.Generation = ++GSaveGeneration;
 	State.Status = TEXT("pending");
 	State.RequestedAt = NowString();
 	State.StartTime = FPlatformTime::Seconds();
 	State.MinFrames = FMath::Max(1, MinFrames);
 	State.DelaySeconds = FMath::Max(0.f, DelaySeconds);
 	State.bActive = true;
+	const uint64 Generation = State.Generation;
 
-	FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([Path](float) -> bool
+	FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([Path, Generation](float) -> bool
 	{
 		FSaveDeferredState* S = GPendingSaves.Find(Path);
-		if (!S || !S->bActive)
+		if (!S || !S->bActive || S->Generation != Generation)
 		{
-			return false; // cancelled by a newer save_deferred, or never existed
+			return false; // replaced by a newer save_deferred, or never existed
 		}
 		++S->Ticks;
 		if (S->Ticks < S->MinFrames || (FPlatformTime::Seconds() - S->StartTime) < S->DelaySeconds)
@@ -887,7 +890,7 @@ FString UMetaHumanCharacterService::GetBodyConstraints(const FString& CharacterP
 	return CharacterResult(Ctx, Out);
 }
 
-FString UMetaHumanCharacterService::SetBodyConstraints(const FString& CharacterPath, const FString& ValuesJson, bool bNormalized)
+FString UMetaHumanCharacterService::SetBodyConstraints(const FString& CharacterPath, const FString& ValuesJson, bool bNormalized, bool bOnlyNamed)
 {
 	FString ParseError;
 	TSharedPtr<FJsonObject> Values = VmhJson::Parse(ValuesJson, ParseError);
@@ -948,12 +951,23 @@ FString UMetaHumanCharacterService::SetBodyConstraints(const FString& CharacterP
 		return VmhJson::Error(TEXT("NO_MATCHING_CONSTRAINT"), FString::Printf(TEXT("None of the keys matched a body constraint. Available: %s"), *FString::Join(Names, TEXT(", "))));
 	}
 
-	// activate only the named measurements plus Height; deactivate every other one (pinning every constraint active
-	// blocked a neck change; Height + the named ones worked, MissionCommander r4/r5 2026-10-06/07).
-	Named.Add(TEXT("Height"));
+	// the named measurements become active; the others keep their flag (a call that only sets Height or the body shape
+	// must not switch off a Neck an earlier call set). bOnlyNamed leaves only the named ones plus Height active:
+	// pinning every constraint active blocked a neck change, Height + the named ones worked (MissionCommander r4/r5).
+	if (bOnlyNamed)
+	{
+		Named.Add(TEXT("Height"));
+	}
 	for (FMetaHumanCharacterBodyConstraint& C : Constraints)
 	{
-		C.bIsActive = Named.Contains(C.Name.ToString());
+		if (Named.Contains(C.Name.ToString()))
+		{
+			C.bIsActive = true;
+		}
+		else if (bOnlyNamed)
+		{
+			C.bIsActive = false;
+		}
 	}
 
 	Ctx.Subsystem->SetBodyConstraints(Ctx.Character, Constraints);
@@ -1685,6 +1699,16 @@ FString UMetaHumanCharacterService::BuildAsync(const FString& CharacterPath, con
 	}
 	const FString Path = Character->GetPathName();
 
+	// never a second build on top of one that is queued or running (a retry after a client timeout would otherwise run a
+	// second multi-minute build into the same Blueprint)
+	if (const FBuildAsyncState* Busy = GPendingBuilds.Find(Path))
+	{
+		if (Busy->Status == TEXT("queued") || Busy->Status == TEXT("running"))
+		{
+			return VmhJson::Error(TEXT("ALREADY_BUILDING"), FString::Printf(TEXT("a build of this character is %s; poll get_build_status"), *Busy->Status));
+		}
+	}
+
 	FBuildAsyncState& State = GPendingBuilds.Add(Path);
 	State = FBuildAsyncState();
 	State.OutputFolder = BuildPath.IsEmpty() ? TEXT("/Game/MetaHumans") : BuildPath;
@@ -1700,6 +1724,11 @@ FString UMetaHumanCharacterService::BuildAsync(const FString& CharacterPath, con
 			S->Status = TEXT("running");
 			const double Start = FPlatformTime::Seconds();
 			const FString Result = UMetaHumanCharacterService::Build(Path, PipelineType, Quality, BuildPath, NameOverride);
+			S = GPendingBuilds.Find(Path); // the map may have grown during the build (another character's request)
+			if (!S)
+			{
+				return false;
+			}
 			S->Seconds = FPlatformTime::Seconds() - Start;
 			FString ParseErr;
 			TSharedPtr<FJsonObject> Parsed = VmhJson::Parse(Result, ParseErr);
