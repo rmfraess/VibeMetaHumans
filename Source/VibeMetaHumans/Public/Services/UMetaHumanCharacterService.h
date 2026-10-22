@@ -209,6 +209,29 @@ public:
 	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
 	static FString SelectWardrobeItem(const FString& CharacterPath, const FString& SlotName, const FString& WardrobeItemPath);
 
+	/**
+	 * The Creator's per-item settings of the worn wardrobe items, read from the character (not a built Blueprint):
+	 * for each selection in SlotName (Hair, Eyebrows, Eyelashes, Beard, Mustache, Peachfuzz, Outfits ...; empty =
+	 * every slot but Character) its current parameter values, their types, the item's defaults and which ones the
+	 * character overrides. Grooms: Melanin, Redness, Roughness, Whiteness, Lightness, DyeColor; Hair adds the Ombre
+	 * (bUseOmbre, OmbreU/V/Color/Shift/Contrast/Intensity) and Highlights (bUseHighlights, HighlightsU/V/Color/
+	 * Blending/Intensity/Variation) groups. Opens the character for editing and assembles its preview when needed.
+	 */
+	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	static FString GetWardrobeItemParameters(const FString& CharacterPath, const FString& SlotName = TEXT(""));
+
+	/**
+	 * Set per-item settings on the character's worn item in SlotName - what the Creator's Hair / Wardrobe panels
+	 * edit, stored on the MetaHuman Character so every build carries them (colour a groom here, never on a built
+	 * Blueprint's MI_WI_* materials: a rebuild resets those). ParametersJson maps parameter names (case-insensitive,
+	 * from get_wardrobe_item_parameters) to values, e.g. {"Melanin": 0.48, "Redness": 0.53, "DyeColor": [1, 0.2, 0.2]};
+	 * colours take [r, g, b(, a)], {"R": ...} or "#RRGGBB". ItemName (e.g. WI_Hair_S_Clean) picks one item when the
+	 * slot holds several. bClearOverrides first resets the item to its defaults (alone = reset). Works on the
+	 * Creator's live preview and commits it to the asset, so it is safe while the Creator is open. Not saved.
+	 */
+	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	static FString SetWardrobeItemParameters(const FString& CharacterPath, const FString& SlotName, const FString& ParametersJson, const FString& ItemName = TEXT(""), bool bClearOverrides = false);
+
 	// =================================================================
 	// Assembly and placement
 	// =================================================================
@@ -378,7 +401,13 @@ public:
 	static FString AddGroomToBlueprint(const FString& BlueprintPath, const FString& ComponentName, const FString& GroomAssetPath, const FString& TargetComponent = TEXT("Face"), const FString& MaterialFromComponent = TEXT(""), bool bSaveBinding = true,
 		const FString& SocketName = TEXT(""), bool bInverseSocketTransform = false, FVector RelativeLocation = FVector::ZeroVector, FRotator RelativeRotation = FRotator::ZeroRotator);
 
-	/** Import a groom from an Alembic (.abc) file (guides/strands) as a UGroomAsset: UGroomImportOptions / AssetImportTask, automated (no dialog). Reports each group's strand/guide counts. */
+	/** Import a groom from an Alembic (.abc) file (guides/strands) as a UGroomAsset: UGroomImportOptions / AssetImportTask, automated (no dialog). Reports each group's strand/guide counts.
+	 *
+	 * Set up to render as a custom groom (2026-10-07, what made DrHart's Blender groom show): bRigidBinding sets every
+	 * LOD's binding to Rigid (an imported groom defaults to Skinning, which draws nothing without a binding asset);
+	 * HairWidthCm > 0 turns the width override on at that width with TipScale at the tips (Blender's Alembic carries no
+	 * widths: without it every strand took a hair-thin default and the groom read as a translucent ghost). Pass
+	 * HairWidthCm <= 0 to keep the file's own widths. Nothing is saved: save the groom in a LATER call. */
 	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
-	static FString ImportGroom(const FString& AlembicPath, const FString& PackagePath, const FString& AssetName);
+	static FString ImportGroom(const FString& AlembicPath, const FString& PackagePath, const FString& AssetName, bool bRigidBinding = true, float HairWidthCm = 0.013f, float TipScale = 0.6f);
 };

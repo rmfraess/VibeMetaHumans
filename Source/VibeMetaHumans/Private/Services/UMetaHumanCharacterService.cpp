@@ -57,6 +57,7 @@
 #include "Rendering/SkeletalMeshRenderData.h"
 #include "StaticMeshResources.h"
 #include "Editor.h"
+#include "EditorViewportClient.h"
 #include "GameFramework/Actor.h"
 #include "MetaHumanBodyType.h"
 #include "MetaHumanCharacter.h"
@@ -74,6 +75,9 @@
 #include "MetaHumanPipelineSlotSelectionData.h"
 #include "MetaHumanTypes.h"
 #include "MetaHumanWardrobeItem.h"
+#include "JsonObjectConverter.h"
+#include "StructUtils/PropertyBag.h"
+#include "MetaHumanCharacterPipelineSpecification.h"
 #include "Misc/Paths.h"
 #include "Subsystem/MetaHumanCharacterBuild.h"
 #include "UObject/UnrealType.h"
@@ -255,6 +259,119 @@ namespace
 		return VmhJson::Ok(Out);
 	}
 
+	/**
+	 * The collection that holds the character's live wardrobe. While the character is open for editing (the
+	 * Creator, or begin_edit), the subsystem works on a PREVIEW copy of the internal collection and copies that
+	 * whole copy back over the asset after each Creator edit (OnEditPreviewCollection). A change made only to the
+	 * internal collection is therefore lost on the next Creator edit: 2026-10-07, MissionCommander's built
+	 * Blueprint wore the grooms add_wardrobe_item had picked while his MetaHuman went back to the Creator's older
+	 * selection. Read and write wardrobe state here, and finish a write with CommitWardrobeEdit.
+	 */
+	UMetaHumanCollection* LiveCollection(UMetaHumanCharacterEditorSubsystem* Subsystem, UMetaHumanCharacter* Character)
+	{
+		if (Subsystem && Subsystem->IsObjectAddedForEditing(Character))
+		{
+			if (UMetaHumanCollection* Preview = Subsystem->GetPreviewCollection(Character))
+			{
+				return Preview;
+			}
+		}
+		return Character->GetMutableInternalCollection();
+	}
+
+	/** Copy an edited preview collection back into the character asset (what the Creator's own panels do), then refresh the preview. */
+	void CommitWardrobeEdit(const FEditContext& Ctx, UMetaHumanCollection* Edited)
+	{
+		if (Edited && Edited != Ctx.Character->GetInternalCollection())
+		{
+			Ctx.Subsystem->OnEditPreviewCollection(Ctx.Character);
+		}
+		Ctx.Character->MarkPackageDirty();
+		Ctx.Subsystem->RunCharacterEditorPipelineForPreview(Ctx.Character);
+		// the Creator's viewport does not redraw on its own after a scripted edit (2026-10-07: the owner had to
+		// refresh); invalidate every editor viewport, the Creator's included
+		if (GEditor)
+		{
+			for (FEditorViewportClient* Client : GEditor->GetAllViewportClients())
+			{
+				if (Client)
+				{
+					Client->Invalidate();
+				}
+			}
+		}
+	}
+
+	/** The selection in SlotName (case-insensitive); ItemName (asset name, e.g. WI_Hair_S_Clean) picks one when a slot holds several. */
+	bool FindSlotSelection(UMetaHumanInstance* Instance, const FString& SlotName, const FString& ItemName, FMetaHumanPipelineSlotSelection& OutSelection, FString& OutError)
+	{
+		TArray<FString> InSlot;
+		for (const FMetaHumanPipelineSlotSelectionData& Data : Instance->GetSlotSelectionData())
+		{
+			if (!Data.Selection.SlotName.ToString().Equals(SlotName, ESearchCase::IgnoreCase) || Data.Selection.SelectedItem.IsNull())
+			{
+				continue;
+			}
+			const FString Name = Data.Selection.SelectedItem.ToAssetNameString();
+			if (ItemName.IsEmpty() || Name.Equals(ItemName, ESearchCase::IgnoreCase))
+			{
+				OutSelection = Data.Selection;
+				return true;
+			}
+			InSlot.Add(Name);
+		}
+		OutError = InSlot.Num() > 0
+			? FString::Printf(TEXT("Slot '%s' has no selected item '%s' (selected: %s)"), *SlotName, *ItemName, *FString::Join(InSlot, TEXT(", ")))
+			: FString::Printf(TEXT("Nothing is selected in slot '%s' (select_wardrobe_item first)"), *SlotName);
+		return false;
+	}
+
+	/** Instance parameters need the collection's built data and an assembly: the Creator's preview has both, run it when missing. */
+	void EnsureAssembled(const FEditContext& Ctx, UMetaHumanInstance* Instance)
+	{
+		if (!Instance->IsAssembled())
+		{
+			Ctx.Subsystem->RunCharacterEditorPipelineForPreview(Ctx.Character);
+		}
+	}
+
+	/** A property bag's values as JSON plus each parameter's type. */
+	TSharedPtr<FJsonObject> BagToJson(const FInstancedPropertyBag& Bag, TSharedPtr<FJsonObject>* OutTypes = nullptr)
+	{
+		const UPropertyBag* Struct = Bag.GetPropertyBagStruct();
+		if (!Struct)
+		{
+			return VmhJson::Obj();
+		}
+		if (OutTypes)
+		{
+			*OutTypes = VmhJson::Obj();
+			for (const FPropertyBagPropertyDesc& Desc : Struct->GetPropertyDescs())
+			{
+				FString Type = StaticEnum<EPropertyBagPropertyType>()->GetNameStringByValue(static_cast<int64>(Desc.ValueType));
+				if (Desc.ValueTypeObject)
+				{
+					Type += TEXT(":") + Desc.ValueTypeObject->GetName();
+				}
+				(*OutTypes)->SetStringField(Desc.Name.ToString(), Type);
+			}
+		}
+		return VmhJson::StructToJson(Struct, Bag.GetValue().GetMemory());
+	}
+
+	TArray<FString> BagNames(const FInstancedPropertyBag& Bag)
+	{
+		TArray<FString> Names;
+		if (const UPropertyBag* Struct = Bag.GetPropertyBagStruct())
+		{
+			for (const FPropertyBagPropertyDesc& Desc : Struct->GetPropertyDescs())
+			{
+				Names.Add(Desc.Name.ToString());
+			}
+		}
+		return Names;
+	}
+
 	TArray<TSharedPtr<FJsonValue>> IntArray(const TArray<int32>& Values)
 	{
 		TArray<TSharedPtr<FJsonValue>> Out;
@@ -307,7 +424,8 @@ namespace
 	{
 		static const TArray<FString> GroomSlots = { TEXT("Hair"), TEXT("Eyebrows"), TEXT("Eyelashes"), TEXT("Beard"), TEXT("Mustache"), TEXT("Peachfuzz") };
 		TArray<FString> Worn;
-		if (UMetaHumanCollection* Collection = Character->GetMutableInternalCollection())
+		FString Unused;
+		if (UMetaHumanCollection* Collection = LiveCollection(GetSubsystem(Unused), Character))
 		{
 			for (const FMetaHumanPipelineSlotSelectionData& Data : Collection->GetMutableDefaultInstance()->GetSlotSelectionData())
 			{
@@ -508,7 +626,7 @@ FString UMetaHumanCharacterService::GetSummary(const FString& CharacterPath)
 		Out->SetArrayField(TEXT("active_body_constraints"), Active);
 	}
 
-	if (UMetaHumanCollection* Collection = Character->GetMutableInternalCollection())
+	if (UMetaHumanCollection* Collection = LiveCollection(Ctx.Subsystem, Character))
 	{
 		TArray<TSharedPtr<FJsonValue>> Selections;
 		for (const FMetaHumanPipelineSlotSelectionData& Data : Collection->GetMutableDefaultInstance()->GetSlotSelectionData())
@@ -1476,12 +1594,13 @@ FString UMetaHumanCharacterService::GetWardrobe(const FString& CharacterPath)
 	{
 		return Ctx.ToError();
 	}
-	UMetaHumanCollection* Collection = Ctx.Character->GetMutableInternalCollection();
+	UMetaHumanCollection* Collection = LiveCollection(Ctx.Subsystem, Ctx.Character);
 	if (!Collection)
 	{
 		return VmhJson::Error(TEXT("NO_COLLECTION"), TEXT("Character has no internal collection"));
 	}
 	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
+	Out->SetBoolField(TEXT("from_edit_preview"), Collection != Ctx.Character->GetInternalCollection());
 	Out->SetArrayField(TEXT("slots"), VmhJson::NameArray(UMetaHumanCollectionBlueprintLibrary::GetSlotNames(Collection)));
 
 	TArray<TSharedPtr<FJsonValue>> Items;
@@ -1516,7 +1635,7 @@ FString UMetaHumanCharacterService::AddWardrobeItem(const FString& CharacterPath
 	{
 		return Ctx.ToError();
 	}
-	UMetaHumanCollection* Collection = Ctx.Character->GetMutableInternalCollection();
+	UMetaHumanCollection* Collection = LiveCollection(Ctx.Subsystem, Ctx.Character);
 	if (!Collection)
 	{
 		return VmhJson::Error(TEXT("NO_COLLECTION"), TEXT("Character has no internal collection"));
@@ -1539,7 +1658,10 @@ FString UMetaHumanCharacterService::AddWardrobeItem(const FString& CharacterPath
 	if (bSelect)
 	{
 		Collection->GetMutableDefaultInstance()->SetSingleSlotSelection(Slot, Key);
-		Ctx.Subsystem->RunCharacterEditorPipelineForPreview(Ctx.Character);
+	}
+	if (bSelect || Existing.Num() == 0)
+	{
+		CommitWardrobeEdit(Ctx, Collection);
 	}
 
 	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
@@ -1557,7 +1679,7 @@ FString UMetaHumanCharacterService::SelectWardrobeItem(const FString& CharacterP
 	{
 		return Ctx.ToError();
 	}
-	UMetaHumanCollection* Collection = Ctx.Character->GetMutableInternalCollection();
+	UMetaHumanCollection* Collection = LiveCollection(Ctx.Subsystem, Ctx.Character);
 	if (!Collection)
 	{
 		return VmhJson::Error(TEXT("NO_COLLECTION"), TEXT("Character has no internal collection"));
@@ -1579,11 +1701,186 @@ FString UMetaHumanCharacterService::SelectWardrobeItem(const FString& CharacterP
 		Key = Keys[0];
 	}
 	Collection->GetMutableDefaultInstance()->SetSingleSlotSelection(Slot, Key);
-	Ctx.Subsystem->RunCharacterEditorPipelineForPreview(Ctx.Character);
+	CommitWardrobeEdit(Ctx, Collection);
 
 	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
 	Out->SetStringField(TEXT("slot"), SlotName);
 	Out->SetStringField(TEXT("item"), Key.IsNull() ? TEXT("") : Key.ToAssetNameString());
+	return CharacterResult(Ctx, Out);
+}
+
+FString UMetaHumanCharacterService::GetWardrobeItemParameters(const FString& CharacterPath, const FString& SlotName)
+{
+	FEditContext Ctx = OpenForEdit(CharacterPath, true);
+	if (!Ctx.IsValid())
+	{
+		return Ctx.ToError();
+	}
+	UMetaHumanCollection* Collection = LiveCollection(Ctx.Subsystem, Ctx.Character);
+	if (!Collection)
+	{
+		return VmhJson::Error(TEXT("NO_COLLECTION"), TEXT("Character has no internal collection"));
+	}
+	UMetaHumanInstance* Instance = Collection->GetMutableDefaultInstance();
+	EnsureAssembled(Ctx, Instance);
+
+	const TMap<FMetaHumanPaletteItemPath, FInstancedPropertyBag> Defaults = Instance->GetAssemblyParameters();
+	const TMap<FMetaHumanPaletteItemPath, FInstancedPropertyBag> Overrides = Instance->GetOverriddenInstanceParameters();
+
+	TArray<TSharedPtr<FJsonValue>> Items;
+	for (const FMetaHumanPipelineSlotSelectionData& Data : Instance->GetSlotSelectionData())
+	{
+		const FString Slot = Data.Selection.SlotName.ToString();
+		const bool bWanted = SlotName.IsEmpty()
+			? Data.Selection.SlotName != UE::MetaHuman::CharacterPipelineSlots::Character
+			: Slot.Equals(SlotName, ESearchCase::IgnoreCase);
+		if (Data.Selection.SelectedItem.IsNull() || !bWanted)
+		{
+			continue;
+		}
+		const FMetaHumanPaletteItemPath ItemPath = Data.Selection.GetSelectedItemPath();
+		TSharedPtr<FJsonObject> Item = VmhJson::Obj();
+		Item->SetStringField(TEXT("slot"), Slot);
+		Item->SetStringField(TEXT("item"), Data.Selection.SelectedItem.ToAssetNameString());
+
+		const FInstancedPropertyBag Current = Instance->GetCurrentInstanceParametersForItem(ItemPath);
+		if (Current.IsValid() && Current.GetNumPropertiesInBag() > 0)
+		{
+			TSharedPtr<FJsonObject> Types;
+			Item->SetObjectField(TEXT("parameters"), BagToJson(Current, &Types));
+			Item->SetObjectField(TEXT("types"), Types);
+		}
+		else
+		{
+			Item->SetObjectField(TEXT("parameters"), VmhJson::Obj());
+			Item->SetStringField(TEXT("note"), TEXT("no instance parameters for this item"));
+		}
+		if (const FInstancedPropertyBag* Default = Defaults.Find(ItemPath))
+		{
+			Item->SetObjectField(TEXT("defaults"), BagToJson(*Default));
+		}
+		const FInstancedPropertyBag* Override = Overrides.Find(ItemPath);
+		Item->SetArrayField(TEXT("overridden"), VmhJson::StringArray(Override ? BagNames(*Override) : TArray<FString>()));
+		Items.Add(MakeShared<FJsonValueObject>(Item));
+	}
+	if (Items.Num() == 0 && !SlotName.IsEmpty())
+	{
+		return VmhJson::Error(TEXT("NOTHING_SELECTED"), FString::Printf(TEXT("Nothing is selected in slot '%s' (get_wardrobe lists the selections)"), *SlotName));
+	}
+
+	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
+	Out->SetArrayField(TEXT("items"), Items);
+	return CharacterResult(Ctx, Out);
+}
+
+FString UMetaHumanCharacterService::SetWardrobeItemParameters(const FString& CharacterPath, const FString& SlotName, const FString& ParametersJson, const FString& ItemName, bool bClearOverrides)
+{
+	TSharedPtr<FJsonObject> Patch;
+	if (!ParametersJson.TrimStartAndEnd().IsEmpty())
+	{
+		FString ParseError;
+		Patch = VmhJson::Parse(ParametersJson, ParseError);
+		if (!Patch.IsValid())
+		{
+			return VmhJson::Error(TEXT("INVALID_JSON"), ParseError);
+		}
+	}
+	if (!Patch.IsValid() && !bClearOverrides)
+	{
+		return VmhJson::Error(TEXT("NOTHING_TO_DO"), TEXT("Pass ParametersJson (e.g. {\"Melanin\": 0.48, \"Redness\": 0.53}) and/or bClearOverrides=true"));
+	}
+
+	FEditContext Ctx = OpenForEdit(CharacterPath, true);
+	if (!Ctx.IsValid())
+	{
+		return Ctx.ToError();
+	}
+	UMetaHumanCollection* Collection = LiveCollection(Ctx.Subsystem, Ctx.Character);
+	if (!Collection)
+	{
+		return VmhJson::Error(TEXT("NO_COLLECTION"), TEXT("Character has no internal collection"));
+	}
+	UMetaHumanInstance* Instance = Collection->GetMutableDefaultInstance();
+	FMetaHumanPipelineSlotSelection Selection;
+	FString Error;
+	if (!FindSlotSelection(Instance, SlotName, ItemName, Selection, Error))
+	{
+		return VmhJson::Error(TEXT("NOTHING_SELECTED"), Error);
+	}
+	EnsureAssembled(Ctx, Instance);
+	const FMetaHumanPaletteItemPath ItemPath = Selection.GetSelectedItemPath();
+	const FString ItemAssetName = Selection.SelectedItem.ToAssetNameString();
+
+	if (bClearOverrides)
+	{
+		Instance->ClearOverriddenInstanceParameters(ItemPath);
+	}
+
+	FInstancedPropertyBag Bag = Instance->GetCurrentInstanceParametersForItem(ItemPath);
+	if (!Bag.IsValid() || Bag.GetNumPropertiesInBag() == 0)
+	{
+		return VmhJson::Error(TEXT("NO_PARAMETERS"), FString::Printf(TEXT("%s in slot '%s' has no instance parameters (or the preview did not assemble; see the Output Log)"),
+			*ItemAssetName, *SlotName));
+	}
+
+	TArray<FString> Changed;
+	if (Patch.IsValid())
+	{
+		const UPropertyBag* BagStruct = Bag.GetPropertyBagStruct();
+		void* BagMemory = Bag.GetMutableValue().GetMemory();
+		for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : Patch->Values)
+		{
+			FProperty* Prop = VmhJson::FindPropertyLoose(BagStruct, Pair.Key);
+			if (!Prop)
+			{
+				return VmhJson::Error(TEXT("UNKNOWN_PARAMETER"), FString::Printf(TEXT("%s has no parameter '%s'. Parameters: %s"),
+					*ItemAssetName, *Pair.Key, *FString::Join(BagNames(Bag), TEXT(", "))));
+			}
+			TSharedPtr<FJsonValue> Value = Pair.Value;
+			// colours as [r, g, b] or [r, g, b, a] as well as {"R": ...} or "#RRGGBB"
+			const FStructProperty* StructProp = CastField<FStructProperty>(Prop);
+			if (StructProp && StructProp->Struct == TBaseStructure<FLinearColor>::Get() && Value->Type == EJson::Array)
+			{
+				const TArray<TSharedPtr<FJsonValue>>& A = Value->AsArray();
+				if (A.Num() < 3)
+				{
+					return VmhJson::Error(TEXT("INVALID_VALUE"), FString::Printf(TEXT("'%s' needs [r, g, b] or [r, g, b, a]"), *Pair.Key));
+				}
+				TSharedPtr<FJsonObject> Color = VmhJson::Obj();
+				Color->SetNumberField(TEXT("R"), A[0]->AsNumber());
+				Color->SetNumberField(TEXT("G"), A[1]->AsNumber());
+				Color->SetNumberField(TEXT("B"), A[2]->AsNumber());
+				Color->SetNumberField(TEXT("A"), A.Num() > 3 ? A[3]->AsNumber() : 1.0);
+				Value = MakeShared<FJsonValueObject>(Color);
+			}
+			if (!FJsonObjectConverter::JsonValueToUProperty(Value, Prop, Prop->ContainerPtrToValuePtr<void>(BagMemory), 0, 0))
+			{
+				return VmhJson::Error(TEXT("INVALID_VALUE"), FString::Printf(TEXT("Could not set '%s' from the value given for '%s'"), *Prop->GetName(), *Pair.Key));
+			}
+			Changed.Add(Prop->GetName());
+		}
+	}
+
+	const EMetaHumanInstanceParameterOverrideResult Result = Changed.Num() > 0
+		? Instance->OverrideInstanceParameters(ItemPath, Bag)
+		: EMetaHumanInstanceParameterOverrideResult::NoParametersWereModified;
+	CommitWardrobeEdit(Ctx, Collection);
+
+	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
+	Out->SetStringField(TEXT("slot"), Selection.SlotName.ToString());
+	Out->SetStringField(TEXT("item"), ItemAssetName);
+	Out->SetArrayField(TEXT("changed"), VmhJson::StringArray(Changed));
+	Out->SetBoolField(TEXT("cleared_overrides"), bClearOverrides);
+	Out->SetBoolField(TEXT("reassembly_required"), EnumHasAnyFlags(Result, EMetaHumanInstanceParameterOverrideResult::ReassemblyRequiredToApplyNewParameters));
+	// the selection's item path is re-resolved on the live collection: the commit may have rebuilt the preview
+	UMetaHumanInstance* Live = LiveCollection(Ctx.Subsystem, Ctx.Character)->GetMutableDefaultInstance();
+	FMetaHumanPipelineSlotSelection After;
+	FString Unused;
+	if (FindSlotSelection(Live, SlotName, ItemAssetName, After, Unused))
+	{
+		Out->SetObjectField(TEXT("parameters"), BagToJson(Live->GetCurrentInstanceParametersForItem(After.GetSelectedItemPath())));
+	}
+	Out->SetStringField(TEXT("next"), TEXT("save the character (save routes to save_deferred while editing); a build carries these into the Blueprint"));
 	return CharacterResult(Ctx, Out);
 }
 
@@ -3201,7 +3498,7 @@ FString UMetaHumanCharacterService::AddGroomToBlueprint(const FString& Blueprint
 	return VmhJson::Ok(Out);
 }
 
-FString UMetaHumanCharacterService::ImportGroom(const FString& AlembicPath, const FString& PackagePath, const FString& AssetName)
+FString UMetaHumanCharacterService::ImportGroom(const FString& AlembicPath, const FString& PackagePath, const FString& AssetName, bool bRigidBinding, float HairWidthCm, float TipScale)
 {
 	if (!FPaths::FileExists(AlembicPath))
 	{
@@ -3238,6 +3535,34 @@ FString UMetaHumanCharacterService::ImportGroom(const FString& AlembicPath, cons
 	{
 		return VmhJson::Error(TEXT("IMPORT_FAILED"), FString::Printf(TEXT("no groom came out of %s (see the Output Log; .abc guides/strands only)"), *AlembicPath));
 	}
+	// what a custom (Blender) groom needs to render, 2026-10-07 on DrHart: every LOD Rigid (Skinning draws nothing
+	// without a binding asset) and a width override (the .abc has no widths: a hair-thin default, a ghost)
+	int32 LODsRigid = 0;
+	if (bRigidBinding)
+	{
+		for (FHairGroupsLOD& GroupLOD : Groom->GetHairGroupsLOD())
+		{
+			for (FHairLODSettings& LOD : GroupLOD.LODs)
+			{
+				LOD.BindingType = EGroomBindingType::Rigid;
+				++LODsRigid;
+			}
+		}
+	}
+	if (HairWidthCm > 0.f)
+	{
+		for (FHairGroupsRendering& Rendering : Groom->GetHairGroupsRendering())
+		{
+			Rendering.GeometrySettings.HairWidth_Override = true;
+			Rendering.GeometrySettings.HairWidth = HairWidthCm;
+			Rendering.GeometrySettings.HairRootScale = 1.f;
+			Rendering.GeometrySettings.HairTipScale = TipScale;
+		}
+	}
+	if (bRigidBinding || HairWidthCm > 0.f)
+	{
+		Groom->PostEditChange();
+	}
 	Groom->MarkPackageDirty();
 
 	TArray<TSharedPtr<FJsonValue>> Groups;
@@ -3258,6 +3583,8 @@ FString UMetaHumanCharacterService::ImportGroom(const FString& AlembicPath, cons
 	Out->SetArrayField(TEXT("groups"), Groups);
 	Out->SetNumberField(TEXT("total_curves"), TotalCurves);
 	Out->SetNumberField(TEXT("total_guides"), TotalGuides);
-	Out->SetStringField(TEXT("hint"), TEXT("no plugin binding exists for a custom groom: add_groom_to_blueprint falls back to an unbound GroomComponent for it (no RBF transfer onto the face)"));
+	Out->SetNumberField(TEXT("lods_rigid"), LODsRigid);
+	Out->SetNumberField(TEXT("hair_width_cm"), HairWidthCm > 0.f ? HairWidthCm : 0.f);
+	Out->SetStringField(TEXT("hint"), TEXT("save the groom in a LATER call (a groom saved in the call that changed it can deadlock the editor); attach it rigidly with add_groom_to_blueprint(SocketName='head', bInverseSocketTransform=true) - binding 40000 strands to a face mesh took 16+ minutes"));
 	return VmhJson::Ok(Out);
 }
