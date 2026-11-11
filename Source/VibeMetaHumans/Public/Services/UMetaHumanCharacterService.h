@@ -13,19 +13,19 @@
  * Mental model: a UMetaHumanCharacter asset holds face/body state plus skin, eyes, makeup, head
  * (eyelashes/teeth) settings and an internal wardrobe collection. Edits go through the
  * MetaHumanCharacterEditorSubsystem; every tool here opens the character for edit automatically
- * (begin_edit) and most changes are committed immediately. Cloud steps (auto-rig, high-res textures)
+ * (native edits require their own session) and most changes are committed immediately. Cloud steps (auto-rig, high-res textures)
  * require an Epic account signed in to the MetaHuman service. The character must be rigged
- * (request_auto_rig) before it can be assembled with a working face rig for Animator / Live Link.
+ * (MetaHumanCharacterEditorSubsystem.request_auto_rigging) before it can be assembled with a working face rig for Animator / Live Link.
  *
  * Python Usage:
  *   svc = unreal.MetaHumanCharacterService
  *   r = svc.create_character("/Game/MetaHumans", "MH_Hero", "")                  # blank template (or a preset path)
- *   svc.set_body_shape("/Game/MetaHumans/MH_Hero", 0.2, 0.3, 0.7, 182)            # masculine, lean, muscular, 182 cm
- *   svc.set_skin_tone("/Game/MetaHumans/MH_Hero", 0.55, 0.45)
- *   svc.set_settings("/Game/MetaHumans/MH_Hero", "eyes", '{"EyeLeft":{"Iris":{"PrimaryColorU":0.2,"PrimaryColorV":0.8}}}')
- *   svc.request_auto_rig("/Game/MetaHumans/MH_Hero", "JointsOnly", True)         # cloud, blocking
+ *   # Body shape: metahuman_toolset.metahuman.MetaHumanToolset.set_body_shape with an edit session.
+ *   # Skin tone: metahuman_toolset.metahuman.MetaHumanToolset.set_skin_tone with an edit session.
+ *   # Settings: read the character struct and commit via unreal.MetaHumanCharacterEditorSubsystem.
+ *   # Rig: unreal.MetaHumanCharacterEditorSubsystem.request_auto_rigging (cloud), then svc.get_auto_rig_status(path)
  *   svc.build("/Game/MetaHumans/MH_Hero", "Cinematic", "Cinematic", "/Game/MetaHumans", "")
- *   svc.spawn_in_level("/Game/MetaHumans/MH_Hero", unreal.Vector(0,0,0), unreal.Rotator(0,0,0), False)
+ *   # Preview: unreal.MetaHumanCharacterEditorSubsystem.spawn_meta_human_actor with a character object.
  */
 UCLASS(BlueprintType)
 class VIBEMETAHUMANS_API UMetaHumanCharacterService : public UToolsetDefinition
@@ -43,14 +43,6 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
 	static FString CreateCharacter(const FString& PackagePath, const FString& AssetName, const FString& PresetCharacterPath);
-
-	/** Open the character for editing in the subsystem (loads the texture synthesis model on first use). Idempotent. */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
-	static FString BeginEdit(const FString& CharacterPath);
-
-	/** Release the character from the editing subsystem (frees preview meshes). */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
-	static FString EndEdit(const FString& CharacterPath);
 
 	/** Summary JSON: rig state, DNA/texture flags, body type, skin/eye tone, active body constraints, wardrobe selections. */
 	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
@@ -83,112 +75,17 @@ public:
 	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
 	static FString GetSettings(const FString& CharacterPath, const FString& Section);
 
-	/**
-	 * Patch a settings section from JSON (only the fields present change) and commit it. Use get_settings or
-	 * MetaHumanObjectService.describe_struct("MetaHumanCharacterSkinSettings") to see the shape.
-	 * Section: skin | eyes | makeup | head | face_evaluation | viewport.
-	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
-	static FString SetSettings(const FString& CharacterPath, const FString& Section, const FString& JsonPatch);
-
-	/** Set the skin tone on the MetaHuman skin tone map. U = lightness (0 light .. 1 dark), V = redness (0 cool .. 1 red). */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
-	static FString SetSkinTone(const FString& CharacterPath, float U, float V);
-
 	/** Set iris colour. U = temperature (0 cool blue/grey .. 1 warm brown), V = brightness (0 dark .. 1 light). Eye: both | left | right. */
 	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
 	static FString SetEyeColor(const FString& CharacterPath, float U, float V, const FString& Eye);
-
-	// =================================================================
-	// Body
-	// =================================================================
-
-	/** Body constraints (parametric body sliders) as JSON: name, active, target, min, max. */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
-	static FString GetBodyConstraints(const FString& CharacterPath);
-
-	/**
-	 * Set body constraints from JSON {"Height":182,"Fat":0.3,"Muscularity":0.7,"Masculine/Feminine":0.2,...}.
-	 * Height is in cm; other values are 0..1 normalised across the constraint's range unless bNormalized is
-	 * false (raw measurements). The named measurements become active; the others keep their active flag, unless
-	 * bOnlyNamed, which leaves only the named ones plus Height active (a neck widening that the other active
-	 * measurements blocked needs that). Commits the body, re-aligns the neck, and returns before/after/delta for
-	 * every measurement (a change to one moves others: Neck +4 cm raised Shoulder Height 1.4 cm).
-	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
-	static FString SetBodyConstraints(const FString& CharacterPath, const FString& ValuesJson, bool bNormalized = true, bool bOnlyNamed = false);
-
-	/** Face model (sculpt) landmarks: index -> [x,y,z] cm in the edit frame, plus likely_ears/likely_neck/likely_skull
-	 * indices guessed from their positions (the landmark SET differs per preset, so this is never a fixed index list). */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
-	static FString GetFaceLandmarks(const FString& CharacterPath);
-
-	/**
-	 * Move sculpt landmarks toward targets and hold every other one in place, repeating translate+commit until
-	 * every residual is under ToleranceCm or MaxIterations runs out. TargetsJson: {"index":[dx,dy,dz]} cm deltas
-	 * (absolute positions instead when bAbsolute). HoldJson: "auto" (every non-target landmark, the default),
-	 * "none", or a JSON array of indices to hold. Refuses while the character wears grooms (spawning the Creator
-	 * preview with grooms on hung the editor for minutes) or while its face rig is on, and refuses any target that
-	 * looks like an ear landmark unless bAllowEars (moving them crumpled MissionCommander's ears, 2026-10-07).
-	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
-	static FString MoveFaceLandmarks(const FString& CharacterPath, const FString& TargetsJson, const FString& HoldJson = TEXT("auto"), float ToleranceCm = 0.06f, int32 MaxIterations = 12, float Gain = 2.5f, bool bAllowEars = false, bool bAbsolute = false);
-
-	/** Convenience body shape: each value 0..1 (negative = leave unchanged), HeightCm 135..220 (negative = unchanged). */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
-	static FString SetBodyShape(const FString& CharacterPath, float MasculineFeminine, float Fat, float Muscularity, float HeightCm);
 
 	/** Switch to a fixed legacy body type (f_med_nrw, m_tal_ovw, ...) or back to BlendableBody. See MetaHumanSetupService.get_enum_options. */
 	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
 	static FString SetBodyType(const FString& CharacterPath, const FString& BodyType);
 
-	// =================================================================
-	// Face
-	// =================================================================
-
-	/** Face model (PCA) coefficients currently driving the head shape. */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
-	static FString GetFaceCoefficients(const FString& CharacterPath);
-
-	/** Replace the face model coefficients (same length as get_face_coefficients returns) and commit. */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
-	static FString SetFaceCoefficients(const FString& CharacterPath, const TArray<float>& Coefficients);
-
 	/** Reset the face back to the archetype (removes sculpting; keeps skin/eyes settings). */
 	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
 	static FString ResetFace(const FString& CharacterPath);
-
-	// =================================================================
-	// Mesh to MetaHuman: import from Identity / DNA / template meshes
-	// =================================================================
-
-	/** Fit the face to a conformed MetaHuman Identity (from MetaHuman Animator). The identity must be conformed first. */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
-	static FString ImportFromIdentity(const FString& CharacterPath, const FString& IdentityPath, bool bUseEyeMeshes = true, bool bUseTeethMesh = true, bool bUseMetricScale = false);
-
-	/** Import a face from a .dna file (whole rig, or fit when bImportWholeRig is false). */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
-	static FString ImportFromFaceDna(const FString& CharacterPath, const FString& DnaFilePath, bool bImportWholeRig = true, bool bIsolateHeadFromBody = false);
-
-	/** Conform the face to MetaHuman-topology template meshes (head + optional eyes/teeth static or skeletal meshes). */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
-	static FString ImportFromTemplate(const FString& CharacterPath, const FString& HeadMeshPath, const FString& LeftEyeMeshPath, const FString& RightEyeMeshPath, const FString& TeethMeshPath);
-
-	// =================================================================
-	// Cloud: rig and textures
-	// =================================================================
-
-	/** Request the MetaHuman service auto-rig ("Mesh to MetaHuman"). RigType: JointsOnly | JointsAndBlendShapes. Needs Epic login. */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
-	static FString RequestAutoRig(const FString& CharacterPath, const FString& RigType, bool bBlocking = false);
-
-	/** Remove the face rig (back to archetype DNA). */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
-	static FString RemoveFaceRig(const FString& CharacterPath);
-
-	/** Download high-resolution skin texture sources from the MetaHuman service (resolutions from skin settings). Needs Epic login. */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
-	static FString RequestTextureSources(const FString& CharacterPath, bool bBlocking = true);
 
 	// =================================================================
 	// Wardrobe (hair, brows, lashes, beard, outfits)
@@ -232,18 +129,6 @@ public:
 	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
 	static FString SetWardrobeItemParameters(const FString& CharacterPath, const FString& SlotName, const FString& ParametersJson, const FString& ItemName = TEXT(""), bool bClearOverrides = false);
 
-	// =================================================================
-	// Assembly and placement
-	// =================================================================
-
-	/** Rebuild the editor preview (after wardrobe changes). */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
-	static FString AssembleForPreview(const FString& CharacterPath);
-
-	/** Can the character be built (assembled) right now? Logs the reason when not. */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
-	static FString CanBuild(const FString& CharacterPath);
-
 	/**
 	 * Assemble the character into a placeable Blueprint plus meshes/materials/grooms.
 	 * PipelineType: Cinematic | Optimized | UEFN. Quality: Low | Medium | High | Cinematic (Optimized/UEFN only).
@@ -265,17 +150,9 @@ public:
 	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
 	static FString GetBuildStatus(const FString& CharacterPath);
 
-	/** status (running|done|failed_or_not_requested) for request_auto_rig's non-blocking mode (it already reports progress on the subsystem; this just shapes it the same way as get_build_status). */
+	/** status (running|done|failed_or_not_requested) for a pending auto-rig request (the subsystem's request_auto_rigging already reports progress on the subsystem; this just shapes it the same way as get_build_status). */
 	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
 	static FString GetAutoRigStatus(const FString& CharacterPath);
-
-	/** Spawn the live-editing MetaHuman actor in the current editor level at a transform. */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
-	static FString SpawnInLevel(const FString& CharacterPath, FVector Location, FRotator Rotation, bool bKeepTransient = false);
-
-	/** Export DNA files (head/body) for the character to a project folder and/or an external directory. */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
-	static FString ExportDna(const FString& CharacterPath, const FString& ProjectPath, const FString& ExternalPath, bool bHead = true, bool bBody = true);
 
 	// =================================================================
 	// Custom mesh to MetaHuman: the Mesh Import tool's "Import > from custom mesh" without the UI (2026-10-04)
@@ -288,24 +165,11 @@ public:
 	 * MetaHuman frame: feet on z=0, facing +Y, centimetres, A-pose with the arms clear of the body and the fingers
 	 * apart, bald, no lashes. With bTrackFace the head is rendered front-on in a preview scene and the face landmarks
 	 * are tracked (the auto solve needs them); the camera follows the mesh's own facing. Blocking: a 60k-vertex
-	 * mesh takes 1-3 minutes. Afterwards the character holds the solved body in the MESH'S pose: save_posed_dna
-	 * before commit_a_pose.
+	 * mesh takes 1-3 minutes. Afterwards the character holds the solved body in the MESH'S pose: MetaHumanCharacterExportBlueprintLibrary.export_posed_dna
+	 * before the subsystem's commit_posed_state_as_a_pose.
 	 */
 	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
 	static FString ImportFromCustomMesh(const FString& CharacterPath, const FString& MeshPath, const FString& HeadMeshPath, bool bAutoSolve = true, bool bTrackFace = true, int32 TrackingImageSize = 1024);
-
-	/**
-	 * The UI's "Manual Solve Actions > Save Pose": the conformed body+head as ONE combined DNA still in the target
-	 * mesh's pose - the baking target for the character's textures. ProjectPath (a content folder) and/or
-	 * ExternalPath (a disk folder); AssetName defaults to <Character>_Posed. MeshPath/HeadMeshPath must be the ones
-	 * import_from_custom_mesh ran with (they key the stored posed state).
-	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
-	static FString SavePosedDna(const FString& CharacterPath, const FString& MeshPath, const FString& HeadMeshPath, const FString& ProjectPath, const FString& ExternalPath, const FString& AssetName);
-
-	/** After the conform: re-evaluate the solved body in the MetaHuman A-pose and refit the face to it (the UI does this when leaving the Import tab). Save the posed DNA first if a bake needs it. */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
-	static FString CommitAPose(const FString& CharacterPath, const FString& MeshPath, const FString& HeadMeshPath);
 
 	/**
 	 * A skeletal mesh asset from a DNA (a DNA asset path, or a .dna file on disk): the DNA asset's "Generate Skeletal
@@ -345,10 +209,6 @@ public:
 	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
 	static FString ImportTexture(const FString& FilePath, const FString& PackagePath, const FString& AssetName, const FString& Kind = TEXT("color"), bool bFlipGreen = false);
 
-	/** Set a texture parameter on a material instance constant (a built MetaHuman's MI_Body_Baked "Basecolor Baked", "Normal Baked", MI_Face_Skin_Baked_LOD3 ...) and update it. */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
-	static FString SetMaterialTexture(const FString& MaterialInstancePath, const FString& ParameterName, const FString& TexturePath);
-
 	/**
 	 * Add a SkeletalMeshComponent to a Blueprint under a parent component (a built MetaHuman's "Body"), set its mesh,
 	 * drive it from the parent's pose (Leader Pose Component) and compile: how an accessory rigged to the MetaHuman
@@ -368,17 +228,6 @@ public:
 	/** Remove a component (by name) from a Blueprint's construction script, promoting its children. Compiles; marks the Blueprint dirty. */
 	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
 	static FString RemoveComponentFromBlueprint(const FString& BlueprintPath, const FString& ComponentName);
-
-	// =================================================================
-	// Hair (2026-10-07): grooms on a built MetaHuman Blueprint
-	// =================================================================
-
-	/**
-	 * Every groom Wardrobe Item under the MetaHuman plugin's optional content (path, display name, slot), for
-	 * SlotName (Hair, Eyebrows, Eyelashes, Beard, Mustache, Peachfuzz) or every slot when empty.
-	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
-	static FString ListWardrobeItems(const FString& SlotName);
 
 	/**
 	 * Add a GroomComponent under a built MetaHuman Blueprint's TargetComponent (default "Face"), bound to it:
