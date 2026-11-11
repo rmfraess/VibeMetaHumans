@@ -89,6 +89,7 @@
 #include "Nodes/HyprsenseNode.h"
 #include "Nodes/ImageUtilNodes.h"
 #include "Pipeline/Pipeline.h"
+#include "Misc/ScopeExit.h"
 
 namespace
 {
@@ -1904,6 +1905,18 @@ FString UMetaHumanCharacterService::ExportFbx(const FString& AssetPath, const FS
 	// an empty material slot took the exporter down with an array assertion (2026-10-04): fill them for the export
 	TArray<int32> Filled;
 	UMaterialInterface* Default = UMaterial::GetDefaultMaterial(MD_Surface);
+	// put the empty slots back on every return, early errors included
+	ON_SCOPE_EXIT
+	{
+		if (USkeletalMesh* SkeletalMesh = Cast<USkeletalMesh>(Asset))
+		{
+			for (int32 i : Filled) { SkeletalMesh->GetMaterials()[i].MaterialInterface = nullptr; }
+		}
+		else if (UStaticMesh* StaticMesh = Cast<UStaticMesh>(Asset))
+		{
+			for (int32 i : Filled) { StaticMesh->GetStaticMaterials()[i].MaterialInterface = nullptr; }
+		}
+	};
 	if (USkeletalMesh* SkeletalMesh = Cast<USkeletalMesh>(Asset))
 	{
 		TArray<FSkeletalMaterial>& Materials = SkeletalMesh->GetMaterials();
@@ -1925,7 +1938,6 @@ FString UMetaHumanCharacterService::ExportFbx(const FString& AssetPath, const FS
 		{
 			if (Section.MaterialIndex < 0 || Section.MaterialIndex >= Materials.Num())
 			{
-				for (int32 i : Filled) { Materials[i].MaterialInterface = nullptr; }
 				return VmhJson::Error(TEXT("BAD_MATERIAL_INDEX"), FString::Printf(TEXT("LOD0 section uses material index %d but the mesh has %d material slots; the FBX exporter would assert. Duplicate the mesh and fix its materials first"), Section.MaterialIndex, Materials.Num()));
 			}
 		}
@@ -1969,16 +1981,6 @@ FString UMetaHumanCharacterService::ExportFbx(const FString& AssetPath, const FS
 	Options->MapSkeletalMotionToRoot = false;
 	Task->Options = Options;
 	const bool bOk = UExporter::RunAssetExportTask(Task);
-
-	// put the empty slots back
-	if (USkeletalMesh* SkeletalMesh = Cast<USkeletalMesh>(Asset))
-	{
-		for (int32 i : Filled) { SkeletalMesh->GetMaterials()[i].MaterialInterface = nullptr; }
-	}
-	else if (UStaticMesh* StaticMesh = Cast<UStaticMesh>(Asset))
-	{
-		for (int32 i : Filled) { StaticMesh->GetStaticMaterials()[i].MaterialInterface = nullptr; }
-	}
 
 	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
 	Out->SetStringField(TEXT("asset"), Asset->GetPathName());
