@@ -49,8 +49,8 @@ mh = unreal.MetaHumanCharacterService
 
 A **MetaHuman Character** asset (`/Game/MetaHumans/MH_Name`) stores face + body state, the look
 settings (skin, eyes, makeup, head model = eyelashes/teeth, face evaluation = head scale) and an
-internal wardrobe **collection** (slots → items). Edits go through the Creator editor subsystem; every
-service tool opens the asset for edit on demand, commits the change and refreshes the preview. The
+internal wardrobe **collection** (slots → items). Edits go through the Creator editor subsystem;
+remaining service tools may open the asset for edit on demand; native subsystem edits require an acquired edit session. The
 character becomes usable for animation after a cloud **auto-rig** (`rig_state: "Rigged"`), and
 becomes a placeable actor after **build** (assembly) writes `BP_<Name>` plus meshes, materials and
 grooms under `/Game/MetaHumans/<Name>`.
@@ -60,36 +60,26 @@ grooms under `/Game/MetaHumans/<Name>`.
 1. `create_character(package_path, name, preset_path)` — `preset_path` empty = blank template.
    Presets live in `/MetaHumanCharacter/Optional/Presets` (optional content) or can be any existing
    character; the new asset copies its state.
-2. Shape the body: `set_body_shape(c, masc_fem, fat, muscularity, height_cm)` (0..1 each, negative
-   = unchanged; height 135..220). Finer control: `get_body_constraints` → `set_body_constraints(c,
-   '{"Height":182,"Upper Arm Length":0.6}')`. Fixed legacy proportions: `set_body_type(c, "m_tal_nrw")`;
-   back to parametric: `set_body_type(c, "BlendableBody")`.
-3. Shape the face: `get_face_coefficients` / `set_face_coefficients` (PCA vector; small deltas),
-   `set_settings(c, "face_evaluation", '{"HeadScale":1.05}')`, `reset_face` to start over.
-   Likeness from a scan or footage: `import_from_identity` (an Identity from
-   `MetaHumanIdentityService`), `import_from_face_dna`, `import_from_template`.
-   Likeness from a single reference PICTURE (no 3D scan, 2026-10-07): `get_face_landmarks(c)` reads the
-   Creator's own sculpt landmarks (`{"landmarks":{"0":[x,y,z],...}, "likely_ears":[...], "likely_neck":[...],
-   "likely_skull":[...]}`, centimetres, edit frame) - match them to a MediaPipe measurement of a front capture
-   of the preview actor (a face-fit script does this), then
-   `move_face_landmarks(c, '{"23":[0.3,0,-0.1],"41":[-0.2,0,0.15]}')` moves just those indices (deltas; pass
-   `bAbsolute=true` for absolute positions) and holds every OTHER landmark in place by default
-   (`HoldJson="auto"`; `"none"` lets everything else drift, a JSON array of indices holds exactly those),
-   repeating translate+commit until every residual is under `ToleranceCm` (default 0.06) or
-   `MaxIterations` (12) runs out - it returns the per-iteration residuals so you can see it converge.
-   It REFUSES while the character wears any groom (spawning the Creator preview with grooms on hung the
-   editor for minutes, 2026-10-06) and while the face rig is on (`remove_face_rig` first), and refuses any
-   target landmark the position heuristic calls an ear unless `bAllowEars=true` - moving ear landmarks
-   crumpled one character's ears (2026-10-07; `likely_ears` is read off positions each call, never a fixed
-   index list, because the landmark SET differs per preset - 79 on one preset, 125 on another).
-4. Look: `set_skin_tone(c, u, v)` (u = lightness 0 light → 1 dark, v = redness 0 → 1),
-   `set_eye_color(c, u, v, "both")` (u = temperature cool → warm, v = brightness dark → light), and
-   JSON patches for everything else:
-   - `set_settings(c, "skin", '{"Skin":{"Roughness":1.0,"FaceTextureIndex":3},"Freckles":{"Density":0.6,"Mask":"Type2"}}')`
-   - `set_settings(c, "eyes", '{"EyeLeft":{"Iris":{"IrisPattern":"Iris004"},"Pupil":{"Dilation":1.0}}}')`
-   - `set_settings(c, "makeup", '{"Lips":{"Type":"Hollywood","Color":{"R":0.4,"G":0.02,"B":0.03,"A":1}},"Eyes":{"Type":"CatEye"}}')`
-   - `set_settings(c, "head", '{"Eyelashes":{"Type":"LongCurl"},"Teeth":{"ToothLength":0.3,"Overbite":0.1}}')`
-   Shapes: `get_settings(c, section)` or `MetaHumanObjectService.describe_struct("MetaHumanCharacterMakeupSettings")`.
+2. Open for native edits: obtain `sub = unreal.get_editor_subsystem(unreal.MetaHumanCharacterEditorSubsystem)`
+   and load the character object. Acquire `sub.try_add_object_to_edit(character)`; if it returns false,
+   do not release a session you did not acquire. The `metahuman_toolset.metahuman.MetaHumanToolset`
+   also exposes `begin_edit`, `set_body_shape` and `set_skin_tone` with session-based arguments;
+   inspect its schema with `vibeue.get_toolset_schema` before `vibeue.exec_tool`. Its edit session is
+   not interchangeable with the old service's path argument. End an owned session when done.
+   For finer control use `sub.get_body_constraints` and `sub.set_body_constraints`, passing the full
+   constraint array, then `sub.commit_body_state`. Fixed legacy proportions: `set_body_type`.
+3. Face: `sub.get_face_model_coefficients` / `sub.set_face_model_coefficients`, or
+   `sub.get_face_landmarks` / `sub.translate_face_landmarks`, then commit the face state. Use the
+   subsystem's `import_from_identity`, `import_from_face_dna` or `import_from_template` for likeness.
+   Native landmark editing does not provide the removed wrapper's convergence loop, held-landmark
+   policy or safety refusals. Clear grooms and remove the face rig before sculpting; previewing a
+   groomed character has hung the editor. Ear edits can crumple ears; identify indices per character
+   and avoid them unless explicitly intended. Landmark sets differ between presets.
+4. Look: skin tone is lightness and redness; use the native session tool above or read
+   `character.skin_settings`, modify the copy and call `sub.commit_skin_settings(character, settings)`.
+   Do likewise with eyes, makeup and head settings and their matching subsystem commit functions.
+   `set_eye_color` remains available; `get_settings` or `MetaHumanObjectService.describe_struct`
+   can help inspect shapes. Native commits use structs, not the former JSON patch.
 5. Wardrobe: `get_wardrobe(c)` lists slots, items in the collection and the current selection. Slots and the
    principal asset each one's items wrap: `Hair, Eyebrows, Eyelashes, Mustache, Beard, Peachfuzz`
    (`GroomBindingAsset`), `Outfits` with its user-facing `Top Garment` / `Bottom Garment` (`ChaosOutfitAsset`),
@@ -98,7 +88,7 @@ grooms under `/Game/MetaHumans/<Name>`.
    `select_wardrobe_item(c, "Hair", "")` clears a slot. Selecting REPLACES the slot's selection
    (`SetSingleSlotSelection`), so layering several `SkeletalMesh` pieces needs the instance's
    `try_add_slot_selection` (no service tool yet). Items come from
-   `MetaHumanSetupService.list_assets("wardrobe", "")` or `list_wardrobe_items("Hair")` (groom slots only;
+   `EditorToolset.AssetToolset.FindAssets` (inspect its schema; search the optional wardrobe folders;
    see **Hair on a built MetaHuman** below for a SECOND groom layered onto a built Blueprint, and
    **Custom hair as a Creator wardrobe item** for making your own groom wearable here).
    Per-item settings - groom colour (Melanin, Redness, Roughness, Whiteness, Lightness, DyeColor, plus the Ombre,
@@ -111,36 +101,30 @@ grooms under `/Game/MetaHumans/<Name>`.
    Colour grooms HERE, never on a built Blueprint's `MI_WI_*` materials: every rebuild regenerates those, while
    the character's values go into every build. Overrides belong to the worn item - select the groom first, then
    set its colours.
-   While the character is open for editing (the Creator's tab, or `begin_edit`), the Creator works on a PREVIEW
+   While the character is open for editing (the Creator's tab, or a native edit session), the Creator works on a PREVIEW
    copy of the collection and copies it back over the asset after each of its own edits. The wardrobe tools read
    and write that live copy and commit it, so they are safe beside an open Creator tab and the two never
    overwrite each other (before 2026-10-07 they wrote the asset directly, and the Creator's next edit reverted
    them: a Blueprint built with one set of grooms while the MetaHuman showed another).
 6. Rig. Presets and edited faces arrive **Unrigged**; the rig comes from Epic's cloud auto-rig:
-   `request_auto_rig(c, "JointsOnly", False)` (`JointsAndBlendShapes` for the heavier cinematic rig),
+   native `sub.request_auto_rigging(char, p)` with `p = unreal.MetaHumanCharacterAutoRiggingRequestParams()`
+   (rig type `JOINTS_ONLY`; `JOINTS_AND_BLEND_SHAPES` for the heavier cinematic rig; the character must be added for edit),
    then poll `get_summary(c)["rig_state"]` (or the shaped `get_auto_rig_status(c)`: `running|done|
    failed_or_not_requested`) until `Rigged`. The first request opens an Epic account
    sign-in page in the browser (device code, expires after ~10 min) - a human must complete it.
    Never pass `bBlocking=True` unless someone is at the machine: a blocking request parks the whole
    editor (and this MCP) until the login finishes or expires (`Login Failed`).
-   Optional `request_texture_sources(c, True)` downloads 2k-8k skin sources (cloud, same login).
-   **Offline fallback (no login):** import the engine's archetype head rig as a whole rig -
-   `import_from_face_dna(c, "<UE>/Engine/Plugins/MetaHuman/MetaHumanCoreTechLib/Content/ArchetypeDNA/SKM_Face.dna", True, False)`
-   gives `rig_state: Rigged` with a generic (archetype) face shape; skin, eyes, makeup, hair and
-   body stay. Then clear the texture gate the same way Epic's own pipeline tests do:
-   `MetaHumanObjectService.set_properties(c, '{"bHasHighResolutionTextures": true}')` (the build uses
-   the locally synthesized textures; wrinkle/animated maps are skipped). Re-rig the real face later
-   with `remove_face_rig(c)` + `request_auto_rig(...)` once signed in.
-7. Build: `can_build(c)` then `build(c, "Cinematic", "Cinematic", "/Game/MetaHumans", "")`. Pipeline
-   `Optimized` + quality `Low|Medium|High` for games; `UEFN` for Fortnite. Result lists the
-   Blueprints. `spawn_in_level(c, loc, rot, False)` places the live preview actor instead (it
-   follows further edits).
-   A build can take 4-5 minutes (texture bakes, groom bindings) and a client that waits on one tool
-   call that long can time out and drop its Unreal tools (2026-10-06): `build_async(c, ...)` queues it
-   on a later editor tick and returns at once (`status: "queued"`), then poll `get_build_status(c)`
-   (`queued|running|done|failed`, `seconds`, `blueprints`) rather than waiting on `build` itself. The
-   build still blocks the game thread once it starts - this only frees the RPC call, not the editor.
-8. `save(c)` and `end_edit(c)`. **Never call `save` (or `MetaHumanCharacterService.save`) on a
+   Download 2k–8k texture sources using `sub.request_texture_sources` with native request parameters.
+   This is a cloud operation with the same login requirement. Native `sub.import_from_face_dna` can
+   import an archetype rig as an offline fallback, but it replaces the face with a generic shape.
+   Do not force the high-resolution texture flag as a substitute for real downloaded sources.
+7. Build: use `sub.can_build_meta_human` to check the loaded character, then
+   `build(c, "Cinematic", "Cinematic", "/Game/MetaHumans", "")`. Alternatively, queue
+   `build_async(c, "Cinematic", "Cinematic", "/Game/MetaHumans", "")` and poll
+   `get_build_status(c)` in later calls. Optimized quality Low/Medium/High is for games.
+   The queued build still blocks the game thread once it starts. For a live preview actor, use
+   `sub.spawn_meta_human_actor`; it follows edits and is not the built gameplay Blueprint.
+8. Save with `save_deferred(c)` and poll `get_save_status(c)`; it ends the edit session. **Never call `save` (or `MetaHumanCharacterService.save`) on a
    character that is still in an edit session and expect it to return quickly: it now ROUTES to
    `save_deferred` automatically and says so (`routed`), because a save made in the same call that
    changed a Creator character deadlocked the editor four times (2026-10-06/07) - a game-thread
@@ -160,8 +144,9 @@ a second "spiky crown" groom layered over the base fringe, keeping every other p
 ```python
 b = json.loads(mh.build(c, "Cinematic", "Cinematic", "/Game/MetaHumans", ""))
 bp = b["blueprints"][0]                                                  # BP_<Name>
-items = json.loads(mh.list_wardrobe_items("Hair"))["items"]              # path, name, slot per groom
-r = json.loads(mh.add_groom_to_blueprint(bp, "HairTop", items[0]["path"], "Face", "Hair", True))
+# Choose a groom Wardrobe Item path with EditorToolset.AssetToolset.FindAssets.
+item_path = "/MetaHumanCharacter/Optional/Grooms/Bindings/Hair/WI_Hair_L_StraightBangs"
+r = json.loads(mh.add_groom_to_blueprint(bp, "HairTop", item_path, "Face", "Hair", True))
 #   -> groom, binding, binding_duplicated, binding_saved, material_slots, materials_copied, compiled
 ```
 
@@ -200,7 +185,7 @@ instead: an RBF bind of ~40k strands kept 12 cores busy for 16+ minutes.
 **Never** spawn a Creator preview (`spawn_meta_human_actor` / any front-capture helper) on a character
 that still wears grooms in its wardrobe collection - that is a DIFFERENT thing from the built
 Blueprint's own grooms above, and doing it hung the shared editor for about 9 minutes (2026-10-06):
-`move_face_landmarks` already refuses for this reason; clear the Creator's groom slots (step 5),
+Native landmark edits do not refuse for this reason; clear the Creator's groom slots (step 5),
 finish sculpting, then add grooms back before building.
 
 ## Custom hair as a Creator wardrobe item
@@ -269,8 +254,7 @@ space, copy that binding and its item, point them at the custom groom, and put t
 8. **Wear and colour** with step 5's tools: `add_wardrobe_item(c, "Hair", WI, True)` (works by path, registered or
    not), then `set_wardrobe_item_parameters` - a new groom wears the default auburn until coloured; which of the
    Ombre / Regions / Highlights groups it offers follows the copied pipeline's flags (step 5).
-   `list_wardrobe_items` reads only the plugin's optional content; find project items with
-   `MetaHumanSetupService.list_assets("wardrobe", "/Game/...")`. Wardrobe changes do not need the rig removed.
+   Find optional-content or project wardrobe items with `EditorToolset.AssetToolset.FindAssets`. Wardrobe changes do not need the rig removed.
 9. **Strands only, so far.** A custom Alembic groom has no card or mesh LODs and no baked texture, while the copied
    pipeline keeps the library's LOD transition (strands -> cards -> ...). Only Cinematic builds and the Creator
    preview were checked: Optimized / Low builds and far LODs may show no hair. Generate cards in the groom (Hair
@@ -369,16 +353,12 @@ c = json.loads(mh.create_character("/Game/MetaHumans", "MH_Dryad", ""))["charact
 r = json.loads(mh.import_from_custom_mesh(c, "/Game/Characters/Dryad/SM_Dryad_conform", "", True, True, 1024))
 #   -> solved, seconds, facing, height_cm, face_tracking {curves, points}, warnings (feet off the floor, metres, facing)
 #      1-3 minutes blocking for a 60k-vertex mesh; the character now holds the body in the MESH'S pose
-mh.save_posed_dna(c, "/Game/Characters/Dryad/SM_Dryad_conform", "", "/Game/Characters/Dryad", "E:/out/Dryad/delivery/metahuman/in", "Dryad_Posed")
-#   -> the UI's "Save Pose": one combined DNA still in that pose = the texture-baking target
-mh.generate_skeletal_mesh_from_dna("/Game/Characters/Dryad/Dryad_Posed", "/Game/Characters/Dryad", "SKM_Dryad_Posed", "body")
-mh.export_fbx("/Game/Characters/Dryad/SKM_Dryad_Posed", "E:/out/Dryad/delivery/metahuman/in/Dryad_Posed.fbx")
-mh.commit_a_pose(c, "/Game/Characters/Dryad/SM_Dryad_conform", "")     # back into the MetaHuman A-pose
-mh.request_auto_rig(c, "JointsOnly", True); mh.request_texture_sources(c, True)
+# Export the posed DNA with unreal.MetaHumanCharacterExportBlueprintLibrary.export_posed_dna;
+# commit the A-pose with sub.commit_posed_state_as_a_pose using a native target mesh key.
+# Check their UE 5.9 signatures and parameter structs; do not pass the former wrapper arguments.
 b = json.loads(mh.build(c, "Cinematic", "Cinematic", "/Game/MetaHumans", ""))
-# textures baked in a DCC onto the posed mesh come back onto the built materials:
-t = json.loads(mh.import_texture("E:/out/Dryad/delivery/metahuman/T_Dryad_Body_N.png", "/Game/MetaHumans/Dryad/Body/Baked", "T_Dryad_Body_N", "normal", True))["texture"]
-mh.set_material_texture("/Game/MetaHumans/Dryad/Body/Materials/MI_Body_Baked", "Normal Baked", t)
+# Import baked textures with mh.import_texture, then use
+# EditorToolset.MaterialInstanceToolset.SetTextureParameter on the loaded material instance.
 # an accessory rigged to the MetaHuman skeleton (SK FBX imported onto metahuman_base_skel) onto the Blueprint:
 mh.attach_skeletal_mesh_to_blueprint("/Game/MetaHumans/Dryad/BP_Dryad", "Hair", "/Game/MetaHumans/Dryad/Accessories/SK_Dryad_Hair", "Body", True)
 # a rigid accessory rides a bone socket instead (a headset on "head"): relative transform in the socket's frame, centimetres
@@ -400,7 +380,7 @@ behind the mesh (and 2% taller), so a bake against its posed DNA missed; the sol
 on the mesh to the millimetre but keeps the archetype face. Bake from a scratch body-only character's posed DNA
 (then delete it), and keep the face-tracked character for the rig and the build; the textures carry over
 because every MetaHuman shares the UV layout. Conform once per fresh character: a second
-`import_from_custom_mesh` after `commit_a_pose` gave a twisted posed DNA.
+`import_from_custom_mesh` after committing the A-pose gave a twisted posed DNA.
 Built materials and their texture parameters: `MI_Body_Baked` ("Basecolor Baked", "Normal Baked", "SRMF Baked",
 "Scatter Baked"), `MI_Face_Skin_Baked_LOD3` / `_LOD5to7` (the same plus "Normal LOD Baked"), `MI_EyeL/R_Baked` ("Iris
 Basecolor Baked", "Iris Normal Baked", "Sclera ..."), `MI_Teeth_Baked`.
@@ -418,35 +398,24 @@ afterwards (an import with materials off can leave `WorldGridMaterial` on them),
 
 ## Example: a specific character
 
+Create the character, acquire an edit session, adjust body and look via the native tools above,
+select wardrobe, rig and download textures. Then build and verify the result:
+
 ```python
-c = json.loads(mh.create_character("/Game/MetaHumans", "MH_Marina", ""))["character"]
-mh.set_body_shape(c, 0.85, 0.25, 0.45, 168)
-mh.set_skin_tone(c, 0.35, 0.55)
-mh.set_eye_color(c, 0.15, 0.75, "both")
-mh.set_settings(c, "head", '{"Eyelashes":{"Type":"LongSlightCurl"}}')
-mh.add_wardrobe_item(c, "Hair", "/MetaHumanCharacter/Optional/Grooms/Bindings/Hair/WI_Hair_L_StraightBangs", True)
-mh.add_wardrobe_item(c, "Eyebrows", "/MetaHumanCharacter/Optional/Grooms/Bindings/Eyebrows/WI_Eyebrows_Thin", True)
-mh.request_auto_rig(c, "JointsOnly", False)   # then poll get_summary(c)["rig_state"] == "Rigged" (needs the Epic sign-in)
 out = json.loads(mh.build(c, "Cinematic", "Cinematic", "/Game/MetaHumans", ""))
-mh.save(c); mh.end_edit(c)
 ```
+
+Save with `save_deferred` and verify `get_save_status` before treating the asset as saved.
 
 ## Gotchas
 
 - `get_summary(c)` is the cheap read: rig state, DNA/texture flags, body type, skin/eye tone,
   active constraints, wardrobe selections.
 - Body constraints are rejected on a fixed body type (`FIXED_BODY`); switch to `BlendableBody` first.
-- `set_body_constraints(c, values, normalized, only_named=False)` activates the measurements you name;
-  the others keep their active flag, so a later body-shape or height call does not switch off a neck an
-  earlier call widened. Pass `only_named=True` to leave only the named ones plus `Height` active: pinning
-  every constraint active blocked a neck widen entirely (it did nothing until only `Height` + `Neck` +
-  `Neck Base` were active, 2026-10-07). When going through the raw subsystem, the values must still be
-  `.copy()`'d and passed back as a whole array in Python - editing `get_body_constraints`' items in
-  place and expecting the subsystem to see it does nothing. The result's `measurements` array gives
-  `name/active/before/after/delta` for EVERY measurement, not just the ones you named, because a body
-  change often moves others as a side effect (a neck widen moved Shoulder Height +1.4 cm too).
-- `can_build` reasons: `Character is not rigged.` -> step 6; `missing textures, use Download Texture
-  Sources` -> `request_texture_sources` (cloud) or the `bHasHighResolutionTextures` flag above.
+- Body constraints must be copied, adjusted and passed back as a whole array; commit the body
+  state afterwards. Activating every constraint once blocked a neck widening; keep only needed
+  constraints active. Changes may move other measurements as a side effect.
+- `sub.can_build_meta_human` may report missing rig or texture sources; complete the cloud steps.
 - The whole-rig DNA import makes the body a fixed type (`fixed_body_type: true`), so body-shape tools
   are rejected afterwards; set body shape first.
 - Wardrobe item paths must be Wardrobe Item assets (`WI_*`), not groom or cloth assets directly

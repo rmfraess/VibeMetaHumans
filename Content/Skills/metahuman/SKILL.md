@@ -1,7 +1,7 @@
 ---
 name: metahuman
 display_name: MetaHumans with VibeMetaHumans
-description: Create, edit, rig, animate and place MetaHumans in Unreal Engine 5.8 through the VibeMetaHumans services (unreal.MetaHumanCharacterService, MetaHumanAnimatorService, MetaHumanIdentityService, MetaHumanLiveLinkService, MetaHumanSetupService, MetaHumanObjectService). Use for any MetaHuman task - new character, body/skin/eyes/hair changes, facial animation from webcam video, iPhone Live Link Face takes or audio, real-time Live Link, assembly into a Blueprint.
+description: Create, edit, rig, animate and place MetaHumans in Unreal Engine 5.9 through the VibeMetaHumans services (unreal.MetaHumanCharacterService, MetaHumanAnimatorService, MetaHumanIdentityService, MetaHumanLiveLinkService, MetaHumanSetupService, MetaHumanObjectService). Use for any MetaHuman task - new character, body/skin/eyes/hair changes, facial animation from webcam video, iPhone Live Link Face takes or audio, real-time Live Link, assembly into a Blueprint.
 vibeue_classes:
   - MetaHumanSetupService
   - MetaHumanCharacterService
@@ -40,9 +40,9 @@ s = json.loads(unreal.MetaHumanSetupService.get_status())
   missing: no presets, no wardrobe library, no texture synthesis. Characters can still be created
   from the blank template and Animator / Live Link work normally. Tell the user; do not try to
   work around it.
-- Cloud steps (`request_auto_rig`, `request_texture_sources`, identity auto-rig) need the editor to
+- Cloud steps (character auto-rig `request_auto_rigging` and `request_texture_sources` on the native subsystem, identity auto-rig) need the editor to
   be signed in to the MetaHuman service with an Epic account. A failed/blocked rig request is the
-  usual symptom; `MetaHumanIdentityService.log_in_to_service("")` opens the login.
+  usual symptom; load the Identity asset and use `unreal.MetaHumanIdentity.log_in_to_auto_rig_service` to open the login.
 
 ## Routing table
 
@@ -56,21 +56,18 @@ s = json.loads(unreal.MetaHumanSetupService.get_status())
 
 ## Rules of thumb
 
-1. **One character at a time.** `MetaHumanCharacterService` opens the asset for editing on first use
-   (texture-synthesis model load, a few seconds). Call `end_edit` when you are done with a character
-   to free preview meshes, and `save` after meaningful edits.
+1. **One character at a time.** Native subsystem edits require an edit session: add the character
+   with `try_add_object_to_edit`, and release it with `remove_object_to_edit` only if acquired.
+   The MetaHumanGenerator toolset also provides session-based editing. Use deferred save and check status.
 2. **Rig before you animate.** A character shows `rig_state: "Rigged"` in `get_summary` only after
-   `request_auto_rig`. Only a rigged character assembles with a working face rig for Animator and
-   Live Link.
-3. **Pick the Animator route by input.** Plain video → `MonoFootage` (no identity). iPhone take in
-   MetaHuman Animator mode → `DepthFootage` + a prepared Identity (best fidelity). Audio file →
-   `Audio`. Never promise an identity from a webcam video: identities need depth.
-4. **Processing is blocking.** `process`, `request_auto_rig(..., True)`, `request_texture_sources`
-   and `build` return when done; a 30-second-timeout MCP client may abandon the call while the
-   editor keeps working. Re-query (`get_status`, `get_summary`) instead of re-running.
-5. **Patch, don't rebuild.** Settings tools take a JSON patch; only the fields you pass change.
-   When unsure of a shape: `MetaHumanObjectService.describe_struct("MetaHumanCharacterSkinSettings")`
-   or `MetaHumanCharacterService.get_settings(c, "skin")`.
+   rigging. Only a rigged character assembles with a working face rig for Animator and Live Link.
+3. **Pick the Animator route by input.** Plain video → `MonoFootage`; an iPhone take in MetaHuman
+   Animator mode → `DepthFootage` plus a prepared Identity; audio → `Audio`.
+4. **Long operations may outlive a request.** Native ingestion and performance processing are
+   asynchronous; `build_async` queues a build. Check the result or status before continuing or retrying.
+5. **Commit settings structs.** Read the relevant character settings struct, modify its copy, then
+   call the matching native subsystem commit function. Inspect shapes with
+   `MetaHumanObjectService.describe_struct` or `MetaHumanCharacterService.get_settings`.
 6. **Keep the user's content layout.** Default output folders are `/Game/MetaHumans` (characters,
    builds) and `/Game/MHA` (capture data, identities, performances); follow the project's own
    convention when one exists.
@@ -79,10 +76,9 @@ s = json.loads(unreal.MetaHumanSetupService.get_status())
 
 ```python
 o = unreal.MetaHumanObjectService
-o.get_properties(perf, ["InputType", "HeadMovementMode"])
-o.set_properties(perf, '{"HeadMovementMode":"ControlRig","bSkipDiagnostics":true}')
+# Native ObjectToolset.GetProperties and SetProperties: inspect schema before calling.
+# SetProperties does not run PostEditChangeProperty; prefer the relevant native setter/commit.
 o.list_functions("MetaHumanCharacterEditorSubsystem", "Commit")
-o.call_function("CaptureManagerIngestBlueprintLibrary", "FindTakeDirectories", '{"SearchDirectory":"D:/Takes","bRecursive":true}')
 o.call_object_function(subject_settings_path, "SetSmoothing", '{"0": "/MetaHumanLiveLink/..."}')  # positional args by index
 o.describe_struct("MetaHumanCharacterEyesSettings")
 ```

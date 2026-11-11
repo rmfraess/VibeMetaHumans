@@ -1,8 +1,8 @@
-# VibeMetaHumans — AI Editor Toolset for MetaHumans (Unreal Engine 5.8)
+# VibeMetaHumans — AI Editor Toolset for MetaHumans (Unreal Engine 5.9)
 
 VibeMetaHumans is a sibling of [VibeUE](https://github.com/kevinpbuckley/VibeUE) that focuses on one
 thing: letting an MCP agent (Claude Code, Cursor, Copilot, …) **create, edit, rig, animate and
-place MetaHumans** inside the Unreal Editor. It plugs into Unreal 5.8's native
+place MetaHumans** inside the Unreal Editor. It plugs into Unreal 5.9's native
 `ToolsetRegistry` + `ModelContextProtocol` server exactly like VibeUE does: no separate server,
 no API key, no in-editor chat. Every tool is also a plain `unreal.<Service>.<tool>()` call in
 editor Python.
@@ -11,17 +11,17 @@ It covers the four workflows of the in-editor MetaHuman pipeline:
 
 | Workflow | Service | What it does |
 |---|---|---|
-| Create & edit a character (MetaHuman Creator) | `MetaHumanCharacterService` | create from the blank template or a preset, body shape/type (`set_body_constraints` activates the measurements you name - `only_named` to switch off the rest - and returns before/after/delta for every one), skin tone, eyes, makeup, teeth/eyelashes, face coefficients, sculpt-landmark fitting to a reference picture (`get_face_landmarks` / `move_face_landmarks`, with ear/neck/skull detection and groom/rig refusals), Mesh-to-MetaHuman imports (Identity / DNA / template meshes), cloud auto-rig + high-res textures (`get_auto_rig_status`), wardrobe (hair, brows, lashes, beard, outfits), non-blocking build and save (`build_async`/`get_build_status`, `save_deferred`/`get_save_status` - `save` routes to it automatically while an edit session is open), spawn in the level, DNA export |
-| **Custom mesh to MetaHuman** (UE 5.8's Import > from custom mesh, headless) | `MetaHumanCharacterService` | `import_from_custom_mesh` (face landmarks tracked on a front-on render, auto solve), `save_posed_dna` (the solved body in the mesh's pose: the baking target), `commit_a_pose`, `generate_skeletal_mesh_from_dna`; round trips with a DCC: `export_fbx`, `import_texture` (verifies it actually built, not a 32x32 placeholder), `reimport_skeletal_mesh` (replace in place, materials restored by slot name), `set_material_texture`, `attach_skeletal_mesh_to_blueprint` / `attach_static_mesh_to_blueprint` / `remove_component_from_blueprint` |
-| **Hair on a built MetaHuman** (2026-10-07) | `MetaHumanCharacterService` | `list_wardrobe_items` (every groom Wardrobe Item by slot), `add_groom_to_blueprint` (a GroomComponent on a built Blueprint, the plugin's binding duplicated and retargeted onto the built face, material overrides copied from an existing groom component), `import_groom` (a custom Alembic groom) |
+| Create & edit a character (MetaHuman Creator) | `MetaHumanCharacterService` + native Creator tools | character creation, body and face editing, settings, rigging, wardrobe, asynchronous build and deferred save; see `metahuman-creator` |
+| **Custom mesh to MetaHuman** | `MetaHumanCharacterService` + Creator subsystem | custom mesh conform, posed DNA export, A-pose commit, DCC round trips and Blueprint accessories |
+| **Hair on a built MetaHuman** | `MetaHumanCharacterService` | add or import grooms; discover wardrobe assets with the native Asset toolset |
 | Facial animation from **webcam / DSLR video** | `MetaHumanAnimatorService` | ingest a video file → Footage Capture Data → MonoFootage Performance → process → AnimSequence / LevelSequence |
 | Facial animation from an **iPhone** (Live Link Face) | `MetaHumanIdentityService` + `MetaHumanAnimatorService` | ingest the take, build and auto-rig an Identity from a neutral frame, process a DepthFootage Performance |
 | Facial animation from **audio only** | `MetaHumanAnimatorService` | SoundWave → Audio Performance with mood controls → process → export |
 | **Real-time** face capture | `MetaHumanLiveLinkService` | webcam / microphone / Live Link Face sources, neutral calibration, head tracking, bind a subject to a placed MetaHuman, Take Recorder |
-| Environment & discovery | `MetaHumanSetupService` | plugin + optional-content status, asset listing (characters, presets, identities, performances, capture data, wardrobe), enum options, open editors |
-| Escape hatch | `MetaHumanObjectService` | read/patch any object's properties by JSON, call any static or instance UFUNCTION (reaches private-header Blueprint libraries such as Capture Manager ingest) |
+| Environment & discovery | `MetaHumanSetupService` + native asset tools | plugin and optional-content status, enum options, asset discovery and editors |
+| Escape hatch | `MetaHumanObjectService` + native Object toolset | inspect or patch properties and call reflected functions |
 
-Every tool returns a JSON string: `{"success": true, ...}` or
+Every Vibe service tool returns a JSON string: `{"success": true, ...}` or
 `{"success": false, "error_code": "...", "error": "..."}`.
 
 > **Optional content.** MetaHuman Creator needs the **"MetaHuman Creator Core Data"** install
@@ -55,54 +55,27 @@ Skill packs under `Content/Skills` register as native **AgentSkills** at startup
 
 ---
 
-## Quick tour (editor Python, or `execute_python_code` through VibeUE)
+## Quick tour (editor Python)
+
+Vibe services return JSON strings; native tools have their own result and asynchronous contracts.
+See the skills for capture, authoring and recording details. Use `vibeue.get_toolset_schema` before
+calling an engine tool: its arguments and results differ from the former service wrappers.
 
 ```python
-import json, unreal
-setup, mh, anim, ident, ll = (unreal.MetaHumanSetupService, unreal.MetaHumanCharacterService,
-                              unreal.MetaHumanAnimatorService, unreal.MetaHumanIdentityService,
-                              unreal.MetaHumanLiveLinkService)
-
-print(json.loads(setup.get_status()))                                   # plugins, optional content, counts
-
-# 1. Create a MetaHuman (blank template, or pass a preset path from setup.list_assets("preset", ""))
-r = json.loads(mh.create_character("/Game/MetaHumans", "MH_Hero", ""))
-c = r["character"]
-mh.set_body_shape(c, 0.2, 0.3, 0.7, 182)                                 # masc/fem, fat, muscle, cm
-mh.set_skin_tone(c, 0.55, 0.45)
-mh.set_eye_color(c, 0.2, 0.8, "both")
-mh.set_settings(c, "makeup", '{"Lips":{"Type":"Natural","Color":{"R":0.3,"G":0.05,"B":0.05,"A":1}}}')
-mh.add_wardrobe_item(c, "Hair", "/MetaHumanCharacter/Optional/Grooms/Bindings/Hair/WI_Hair_L_StraightBangs", True)
-mh.request_auto_rig(c, "JointsOnly", True)                               # cloud, blocking
+import json, unreal, vibeue
+setup, mh = unreal.MetaHumanSetupService, unreal.MetaHumanCharacterService
+print(json.loads(setup.get_status()))
+c = json.loads(mh.create_character("/Game/MetaHumans", "MH_Hero", ""))["character"]
+# Add the character for native edits and release it when done; see metahuman-creator.
+# After rigging and downloading textures, build synchronously:
 b = json.loads(mh.build(c, "Cinematic", "Cinematic", "/Game/MetaHumans", ""))
-print(b["blueprints"])                                                   # BP_MH_Hero ...
-mh.spawn_in_level(c, unreal.Vector(0, 0, 0), unreal.Rotator(0, 0, 0), False)
-
-# 2. Webcam / DSLR video -> animation (no identity needed)
-cd = json.loads(anim.ingest_mono_video("D:/Takes/line01.mp4", "", "line01", 1))["capture_data"]
-p  = json.loads(anim.create_performance("/Game/MHA", "Perf_line01", "MonoFootage", cd, "", ""))["performance"]
-anim.process(p, -1, -1)
-anim.export_anim_sequence(p, "/Game/MHA/Anims", "AS_line01", "", True, True)
-
-# 3. iPhone (Live Link Face, MetaHuman Animator mode) -> identity -> animation
-cd = json.loads(anim.ingest_live_link_face_take("D:/Takes/Kevin_Take01"))["capture_data"]
-i  = json.loads(ident.create_identity_from_footage("/Game/MHA", "ID_Kevin", cd, 120, 1, True, False))["identity"]
-# ... poll ident.get_status(i) until face.has_dna, then:
-ident.prepare_for_performance(i)
-p  = json.loads(anim.create_performance("/Game/MHA", "Perf_take01", "DepthFootage", cd, i, ""))["performance"]
-anim.process(p, -1, -1)
-anim.export_level_sequence(p, "/Game/MHA/Seq", "LS_take01", b["blueprints"][0], False, True, True, False)
-
-# 4. Audio only
-p = json.loads(anim.create_performance("/Game/MHA", "Perf_vo01", "Audio", "", "", "/Game/Audio/vo01"))["performance"]
-anim.set_audio_mood(p, "Happiness", 0.6, "FullFace", "ControlRig")
-anim.process(p, -1, -1)
-
-# 5. Live
-ll.add_video_source("", "Webcam", -1); ll.capture_neutrals("Webcam")
-ll.bind_subject_to_actor("BP_MH_Hero", "Webcam", True)
-ll.start_take_recording(["Webcam"]); ...; ll.stop_take_recording()
+# For long builds, use build_async instead and poll get_build_status in later calls.
+print(vibeue.get_toolset_schema("CaptureManagerToolset.CaptureManagerIngestTools"))
 ```
+
+Ingest and processing are asynchronous in the native toolsets; wait for completion and inspect the
+result before using the capture data or exporting. Native edits need an edit session and native
+settings structs, not the old JSON-patch wrapper. Use deferred save and check its final status.
 
 Through the MCP endpoint the same tools appear as `VibeMetaHumans.MetaHumanCharacterService.CreateCharacter`
 etc. (`list_toolsets` / `describe_toolset` / `call_tool`).
@@ -131,11 +104,9 @@ Design notes:
   private header (Capture Manager ingest, Take Recorder's Live Link source) the service goes through
   reflection (`VmhJson::CallStaticFunction` / `CallObjectFunction`), which is also what
   `MetaHumanObjectService.call_function` exposes to agents.
-- Settings edits are JSON patches onto the real `USTRUCT`s (`FMetaHumanCharacterSkinSettings` …) so
-  the whole surface of the MetaHuman Creator is reachable without a wrapper per field; use
-  `MetaHumanObjectService.describe_struct("MetaHumanCharacterEyesSettings")` to see a shape.
-- Long operations (auto-rig, texture download, performance processing) run blocking on the game
-  thread so one tool call = one finished step; Epic's MCP endpoint has no request timeout.
+- Native Creator settings edits read a settings struct, modify the copy, then commit it through the
+  character editor subsystem. Use `MetaHumanObjectService.describe_struct("MetaHumanCharacterEyesSettings")` to inspect a shape.
+- Long operations can outlive a request. Check their status or async result before continuing or retrying.
 - Nothing here needs the VibeUE plugin, but they pair well: VibeUE's `execute_python_code` is the
   easiest way to drive these services, and its `capture_image` shows the result.
 

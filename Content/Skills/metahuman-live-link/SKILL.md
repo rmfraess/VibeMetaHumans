@@ -32,22 +32,22 @@ ll = unreal.MetaHumanLiveLinkService
 |---|---|---|
 | Webcam / capture card (local MetaHuman Animator real-time solve) | `add_video_source(device_substring, subject, format_index)` | a camera; the MetaHuman Live Link plugin's real-time models (installed with the engine) |
 | Microphone (audio-to-face) | `add_audio_source(device_substring, subject)` | a mic |
-| iPhone / iPad running Live Link Face | `add_live_link_face_source(phone_ip, subject, 14785)` | app open, **MetaHuman Animator** mode, same network |
+| iPhone / iPad running Live Link Face | `unreal.LiveLinkFaceSourceBlueprint.connect` (create a source first) | app open, **MetaHuman Animator** mode, same network |
 
-`list_video_devices(True)` shows cameras with their formats (index, width, height, fps); leave
-`format_index` at -1 for an automatic 720p-1080p / 24-60 fps choice. Device matching is a substring of
-the name. Source creation blocks a few seconds while the device starts.
-
-`list_subjects()` reports `state` per subject: `Connected` is good; `Unresponsive` after a phone
-connect means the app is not streaming (wrong mode or IP); `Disconnected` means the device went away.
+Use `unreal.MetaHumanLocalLiveLinkSourceBlueprint.get_video_devices` and the track/format
+APIs for device discovery. `format_index` -1 lets the remaining video service select automatically.
+Use `unreal.LiveLinkBlueprintLibrary.get_live_link_subjects` and subject-state APIs to inspect sources:
+`Connected` is good; `Unresponsive` after a phone connection means it is not streaming; `Disconnected`
+means the device went away.
 `remove_source(guid)` / `remove_source("all")` cleans up.
 
 ## Calibrate
 
-With the performer relaxed and facing the camera: `capture_neutrals(subject)` (neutral frame + head
-pose). Head output: `set_head_tracking(subject, orientation, translation, stabilization)`. Everything
-else on the subject settings object is reachable with `subject_settings(subject, json_patch)` (empty
-patch = read): smoothing params, calibration alpha, mood for audio subjects.
+With the performer relaxed and facing the camera, call `capture_neutrals` on the native
+`unreal.MetaHumanLiveLinkSubjectSettings` object. For video subject settings, use
+`unreal.MetaHumanVideoBaseLiveLinkSubjectSettings.set_head_orientation` and the corresponding
+translation control. The remaining `subject_settings(subject, json_patch)` exposes other settings.
+Inspect native method signatures before calling; the former service accepted different arguments.
 
 ## Bind to a character
 
@@ -67,8 +67,9 @@ MetaHuman Blueprint (the Creator preview actor does not take Live Link); build t
 ```python
 ll.start_take_recording(["Webcam"])     # opens Take Recorder, adds a Live Link source per subject, starts
 ...
-r = json.loads(ll.stop_take_recording()) # r["last_recorded_sequence"]
-ll.get_take_recorder_status()
+panel = unreal.TakeRecorderBlueprintLibrary.open_take_recorder_panel()
+panel.stop_recording()
+print(unreal.TakeRecorderBlueprintLibrary.is_recording())
 ```
 
 Take Recorder writes a Level Sequence under `/Game/Cinematics/Takes/<date>/` with an animation track
@@ -81,5 +82,5 @@ real-time solve).
 - Subjects persist for the editor session only; re-add after a restart (or save a Live Link preset).
 - The real-time video solve needs the GPU; expect a few seconds of warm-up on the first frames.
 - The phone must show the same IP you pass; port 14785 is the Live Link Face control port.
-- `capture_neutrals` again whenever the performer or camera moves.
+- Capture neutrals again whenever the performer or camera moves.
 - Engine-level reference: UnrealEngineSkills `ue-metahuman-live-link`.

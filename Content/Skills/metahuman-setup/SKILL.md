@@ -33,12 +33,11 @@ Returns one JSON object. Fields that drive decisions:
 | `asset_counts` | characters, presets, identities, performances, capture data, wardrobe items, built MetaHuman Blueprints | zero presets with optional content installed means the asset registry has not scanned yet; call again |
 | `live_link_sources` / `live_link_subjects` | current Live Link state | – |
 
-## list_assets(kind, search_root)
+## Asset discovery
 
-`kind`: `character`, `preset`, `identity`, `performance`, `capture_data`, `wardrobe`, `collection`,
-`blueprint` (built MetaHumans under `/Game/MetaHumans`), `soundwave`, `animation`, `level_sequence`.
-`search_root` empty uses the kind's default (`/Game`, or the plugin's `Optional` folder for presets
-and wardrobe). Returns object paths you can pass straight to the other services.
+Use `EditorToolset.AssetToolset.FindAssets` through `vibeue.exec_tool` after inspecting
+`vibeue.get_toolset_schema("EditorToolset.AssetToolset")`. Search the appropriate project or plugin
+content root for characters, presets, identities, performances, capture data and wardrobe items.
 
 Wardrobe item naming (optional content): `/MetaHumanCharacter/Optional/Grooms/Bindings/<Slot>/WI_<...>`
 where `<Slot>` is `Hair`, `Eyebrows`, `Eyelashes`, `Mustaches`, `Beards`, `Peachfuzz`; clothing under
@@ -52,9 +51,9 @@ Names accepted by the other services: `body_type` (`f_med_nrw` … `m_tal_ovw`, 
 `Audio`, `MonoFootage`), `head_movement_mode`, `audio_mood`, `audio_output_controls`, plus the
 settings section names and wardrobe slot names.
 
-## open_in_editor(asset_path)
+## Open an asset editor
 
-Opens the MetaHuman Character editor, Identity editor, Performance editor, etc. Use it when the user
+Use `unreal.get_editor_subsystem(unreal.AssetEditorSubsystem).open_editor_for_assets` with loaded assets to open the Character, Identity or Performance editor. Use it when the user
 wants to look at a result; it is not needed for any scripted step.
 
 ## Typical opening sequence
@@ -62,6 +61,6 @@ wants to look at a result; it is not needed for any scripted step.
 ```python
 s = json.loads(svc.get_status())
 assert s["plugins"]["MetaHumanCharacter"] == "enabled"
-chars = json.loads(svc.list_assets("character", "/Game"))["assets"]
-presets = json.loads(svc.list_assets("preset", ""))["assets"] if s["optional_content_installed"] else []
+import vibeue
+print(vibeue.get_toolset_schema("EditorToolset.AssetToolset"))  # FindAssets arguments
 ```

@@ -32,79 +32,57 @@ anim, ident = unreal.MetaHumanAnimatorService, unreal.MetaHumanIdentityService
 
 ## Choose the route by input
 
-| Input | Capture data | Identity | Performance `InputType` |
+| Input | Native capture tool | Identity | Performance input |
 |---|---|---|---|
-| Video file from a webcam / DSLR / phone camera roll | `ingest_mono_video(video, audio_or_empty, slate, take)` | none | `MonoFootage` |
-| iPhone Live Link Face take (**MetaHuman Animator** capture mode → has depth) | `ingest_live_link_face_take(take_dir)` | required, prepared | `DepthFootage` |
-| Take archive (.zip from Live Link Hub / Capture Manager) | `ingest_take_archive(path)` | depends on contents | as above |
-| Audio file (SoundWave asset) | none | none | `Audio` |
+| Webcam / DSLR / phone video | `CaptureManagerToolset.CaptureManagerIngestTools.IngestMonoVideo` | none | `MonoFootage` |
+| Live Link Face take with depth | `CaptureManagerToolset.CaptureManagerIngestTools.IngestLiveLinkFace` | prepared | `DepthFootage` |
+| `.cptake` archive | `CaptureManagerToolset.CaptureManagerIngestTools.IngestTakeArchive` | depends on contents | as appropriate |
+| SoundWave asset | none | none | `Audio` |
 
-`find_take_directories(dir, True)` lists what is on disk. Ingest results report `has_depth`; a
-take without depth can only go the MonoFootage route. ARKit-mode Live Link Face takes have no depth.
+Use `CaptureManagerToolset.CaptureManagerIngestTools.ScanForTakes` to find takes. Check its
+truncation flag. ARKit-mode takes have no depth and use the MonoFootage route.
 
-## 1. Webcam / DSLR video → animation
+## Workflow
 
-```python
-cd = json.loads(anim.ingest_mono_video("D:/Takes/line01.mp4", "", "line01", 1))["capture_data"]
-p  = json.loads(anim.create_performance("/Game/MHA", "Perf_line01", "MonoFootage", cd, "", ""))["performance"]
-anim.configure_performance(p, '{"HeadMovementMode":"ControlRig","bHeadStabilization":true}')   # optional
-r  = json.loads(anim.process(p, -1, -1))              # blocking; r["processed_frames"]
-a  = json.loads(anim.export_anim_sequence(p, "/Game/MHA/Anims", "AS_line01", "", True, True))
-```
+1. Ingest footage with the matching Capture Manager tool. These ingests are asynchronous: wait for
+   completion and use the returned capture-data asset, not a guessed path. Call through
+   `vibeue.exec_tool(toolset, tool, args)` and inspect `vibeue.get_toolset_schema(toolset)` for
+   parameters and async result handling. Good video has a well-lit, forward-facing face.
+2. For depth, create an Identity using `ident.create_identity_from_footage`; auto-rig is asynchronous,
+   so poll `ident.get_status` until rigging completes and DNA exists. Run
+   `MetaHumanAnimatorToolset.MetaHumanAnimatorIdentityTools.PrepareIdentityForPerformance` and wait
+   for its result before processing. To seed a character from the Identity, use the native
+   `unreal.MetaHumanCharacterEditorSubsystem.import_from_identity` in an acquired edit session.
+   Identity auto-rig requires Epic login; `unreal.MetaHumanIdentity.log_in_to_auto_rig_service` is
+   an instance method on the loaded Identity. Body type index 1–6 picks the preview preset.
+3. Use `anim.create_performance` with the capture data and, for depth, the prepared Identity.
+   For audio, use the SoundWave asset; `anim.set_audio_mood` controls mood and output.
+   `anim.configure_performance` can adjust the remaining settings.
+4. Process using `MetaHumanAnimatorToolset.MetaHumanAnimatorPerformanceTools.ProcessPerformance`.
+   Inspect its schema and await the async result; use `anim.get_status` to inspect the performance.
+   `unreal.MetaHumanPerformance.cancel_pipeline` cancels a running pipeline on the loaded asset.
+5. Export animation with `unreal.MetaHumanAnimatorExportTools.export_performance_animation_sequence`,
+   or a Level Sequence with `unreal.MetaHumanPerformanceExportUtils.export_level_sequence`.
+   Inspect the engine API signatures and settings before calling: these APIs do not accept the old
+   wrapper's path-and-flags argument list. Set the target skeleton explicitly for animation export;
+   a built MetaHuman's Face component can play the sequence. Open results with
+   `unreal.get_editor_subsystem(unreal.AssetEditorSubsystem).open_editor_for_assets`.
 
-Good footage: face filling a third of the frame, even light, 24-60 fps, performer facing the
-camera. Processing needs a D3D12/Vulkan GPU and the NNE ORT runtime; `process` returns
-`CANNOT_PROCESS` with the status when inputs are incomplete.
-
-## 2. iPhone take → identity → animation (best fidelity)
-
-```python
-cd = json.loads(anim.ingest_live_link_face_take("D:/Takes/Kevin_Neutral"))["capture_data"]
-i  = json.loads(ident.create_identity_from_footage("/Game/MHA", "ID_Kevin", cd, 120, 1, True, False))["identity"]
-# frame 120 = a frame where the performer holds a relaxed neutral face. Auto-rig is asynchronous:
-st = json.loads(ident.get_status(i))                  # poll until not st["auto_rig_in_progress"] and st["face"]["has_dna"]
-ident.prepare_for_performance(i)                       # trains predictive solvers (required for DepthFootage)
-cd2 = json.loads(anim.ingest_live_link_face_take("D:/Takes/Kevin_Line01"))["capture_data"]
-p  = json.loads(anim.create_performance("/Game/MHA", "Perf_Kevin01", "DepthFootage", cd2, i, ""))["performance"]
-anim.process(p, -1, -1)
-```
-
-The same identity can give the character its likeness:
-`MetaHumanCharacterService.import_from_identity(character, i, True, True, False)`.
-Identity creation needs the Epic login for auto-rig (`ident.log_in_to_service("")`). Body type index
-1-6 picks the preset body used for previews only.
-
-## 3. Audio only
+For AI tool schemas:
 
 ```python
-p = json.loads(anim.create_performance("/Game/MHA", "Perf_vo01", "Audio", "", "", "/Game/Audio/vo01"))["performance"]
-anim.set_audio_mood(p, "Happiness", 0.6, "FullFace", "ControlRig")   # moods: AutoDetect, Neutral, Happiness, Sadness, Disgust, Anger, Surprise, Fear, ...
-anim.process(p, -1, -1)
-anim.export_anim_sequence(p, "/Game/MHA/Anims", "AS_vo01", "", True, True)
+import vibeue
+print(vibeue.get_toolset_schema("CaptureManagerToolset.CaptureManagerIngestTools"))
+print(vibeue.get_toolset_schema("MetaHumanAnimatorToolset.MetaHumanAnimatorPerformanceTools"))
+print(vibeue.get_toolset_schema("MetaHumanAnimatorToolset.MetaHumanAnimatorIdentityTools"))
 ```
-
-Audio processing runs on CPU and needs no GPU; `MouthOnly` output controls keep the upper face free
-for hand animation. Import the wav first (any importer) so a SoundWave asset exists.
-
-## Export and apply
-
-- `export_anim_sequence(p, pkg, name, target_skeleton, head_movement, processing_range_only)`:
-  target empty = performer skeleton; pass `/Game/MetaHumans/Common/Face/Face_Archetype_Skeleton`
-  (exists once a MetaHuman has been built) to play on any MetaHuman face. Play it on the built
-  Blueprint's Face component (Sequencer animation track, or the Face AnimBP slot).
-- `export_level_sequence(p, pkg, name, target_metahuman_bp, identity, camera, audio, video)`: with a
-  built MetaHuman Blueprint path the sequence drives that character with the Face control rig track,
-  head movement, and audio. Open it with `MetaHumanSetupService.open_in_editor`.
-- `get_status(p)` anytime: inputs, `can_process`, `processed_frames`, `diagnostics_warning`.
-- `configure_performance(p, json)` for anything else (`SolveType`, `bSkipDiagnostics`,
-  `StartFrameToProcess`/`EndFrameToProcess`, `FocalLength`, `UserExcludedFrames`).
 
 ## Gotchas
 
 - Capture data assets land under `/Game/MHA` style folders chosen by Capture Manager settings; the
   ingest result gives the real path, use it.
-- One performance processes at a time. `process` blocks the game thread; MCP clients with short
-  timeouts should poll `get_status` rather than re-run.
+- One performance processes at a time. Check the async result and `get_status` after a timeout
+  rather than starting the operation again.
 - An identity must be prepared (`face.has_predictive_solvers`) before a DepthFootage performance
   reports `can_process`.
 - Epic's own sample scripts use mood names like `HAPPY`; the 5.8 enum names are `Happiness`,
