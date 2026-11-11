@@ -11,10 +11,10 @@
  *
  * A MetaHuman Identity asset turns a neutral-expression frame of depth footage (an iPhone
  * Live Link Face take captured in MetaHuman Animator mode, ingested with
- * MetaHumanAnimatorService.ingest_live_link_face_take) into a conformed template mesh, then the
+ * CaptureManagerToolset.CaptureManagerIngestTools.IngestLiveLinkFace) into a conformed template mesh, then the
  * MetaHuman cloud service turns that into a rigged face (DNA). A prepared identity is required to
  * process DEPTH footage performances; it can also be imported into a MetaHuman Character
- * (MetaHumanCharacterService.import_from_identity) to get a likeness.
+ * (unreal.MetaHumanCharacterEditorSubsystem.import_from_identity) to get a likeness.
  *
  * Monocular webcam video does not produce depth, so it cannot create an identity; use it for
  * MonoFootage performances instead.
@@ -23,7 +23,7 @@
  *   svc = unreal.MetaHumanIdentityService
  *   r = svc.create_identity_from_footage("/Game/MHA", "ID_Kevin", "/Game/MHA/Take01_FootageCaptureData", 120, 1, True, False)
  *   svc.get_status("/Game/MHA/ID_Kevin")                 # poll auto_rig_in_progress until false and has_dna is true
- *   svc.prepare_for_performance("/Game/MHA/ID_Kevin")   # trains the predictive solvers (needed for depth performances)
+ *   # Train predictive solvers with MetaHumanAnimatorToolset.MetaHumanAnimatorIdentityTools.PrepareIdentityForPerformance.
  */
 UCLASS(BlueprintType)
 class VIBEMETAHUMANS_API UMetaHumanIdentityService : public UToolsetDefinition
@@ -50,14 +50,6 @@ public:
 	/** Send the conformed face to the MetaHuman service for auto-rigging (asynchronous). Poll get_status. */
 	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Identity")
 	static FString RequestAutoRig(const FString& IdentityPath);
-
-	/** "Prepare for Performance": train the predictive solvers so depth-footage performances can use this identity. Needs DNA. */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Identity")
-	static FString PrepareForPerformance(const FString& IdentityPath);
-
-	/** Open the Epic login flow for the MetaHuman service (auto-rig). Pass any identity path, or "" to use a temporary one. */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Identity")
-	static FString LogInToService(const FString& IdentityPath);
 
 	/** Export the identity's DNA (and brows json) to files on disk. */
 	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Identity")

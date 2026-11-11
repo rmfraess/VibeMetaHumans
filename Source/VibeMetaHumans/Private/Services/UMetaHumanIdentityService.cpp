@@ -295,60 +295,6 @@ FString UMetaHumanIdentityService::RequestAutoRig(const FString& IdentityPath)
 	return VmhJson::Ok(Out);
 }
 
-FString UMetaHumanIdentityService::PrepareForPerformance(const FString& IdentityPath)
-{
-	FString Error;
-	UMetaHumanIdentity* Identity = LoadIdentity(IdentityPath, Error);
-	if (!Identity)
-	{
-		return VmhJson::Error(TEXT("IDENTITY_NOT_FOUND"), Error);
-	}
-	UMetaHumanIdentityFace* Face = GetFace(Identity, false);
-	if (!Face)
-	{
-		return VmhJson::Error(TEXT("NO_FACE_PART"), TEXT("The identity has no Face part"));
-	}
-	if (!Face->HasDNABuffer())
-	{
-		return VmhJson::Error(TEXT("NO_DNA"), TEXT("The face has no DNA yet; request_auto_rig (and wait for it) first"));
-	}
-	const bool bOk = Face->RunPredictiveSolverTraining();
-	FString SaveError;
-	VmhAssets::Save(Identity, SaveError);
-	TSharedPtr<FJsonObject> Out = StatusJson(Identity);
-	Out->SetBoolField(TEXT("prepared_for_performance"), bOk);
-	return bOk ? VmhJson::Ok(Out) : VmhJson::Error(TEXT("PREPARE_FAILED"), TEXT("RunPredictiveSolverTraining returned false (see Output Log)"), Out);
-}
-
-FString UMetaHumanIdentityService::LogInToService(const FString& IdentityPath)
-{
-	UMetaHumanIdentity* Identity = nullptr;
-	FString Error;
-	if (!IdentityPath.IsEmpty())
-	{
-		Identity = LoadIdentity(IdentityPath, Error);
-		if (!Identity)
-		{
-			return VmhJson::Error(TEXT("IDENTITY_NOT_FOUND"), Error);
-		}
-	}
-	else
-	{
-		Identity = NewObject<UMetaHumanIdentity>(GetTransientPackage(), NAME_None, RF_Transient);
-	}
-	if (!Identity->IsLoggedInToService())
-	{
-		Identity->LogInToAutoRigService();
-	}
-	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
-	Out->SetBoolField(TEXT("logged_in"), Identity->IsLoggedInToService());
-	if (!Identity->IsLoggedInToService())
-	{
-		Out->SetStringField(TEXT("hint"), TEXT("A browser/Epic login window may have opened; finish it and call again."));
-	}
-	return VmhJson::Ok(Out);
-}
-
 FString UMetaHumanIdentityService::ExportDna(const FString& IdentityPath, const FString& DnaOutPath, const FString& BrowsOutPath)
 {
 	FString Error;
