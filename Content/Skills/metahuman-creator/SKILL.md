@@ -437,3 +437,23 @@ Save with `save_deferred` and verify `get_save_status` before treating the asset
 - Read the engine-level reference skill `ue-metahuman-creator` (UnrealEngineSkills) when you need
   struct field semantics, pipeline internals or C++, and `ue-hair-and-grooms` for groom assets, Alembic
   import, bindings and Creator hair internals.
+- Before `import_from_template`, copy or commit the character asset: restoring a face-coefficient
+  snapshot afterwards does not recover the original shape (it was ~0.1 cm mean, ~0.9 cm max off).
+- `import_from_template` keeps broad shape changes but strips small neck and under-jaw features
+  (an Adam's apple landed ~15%, jaw-angle brushes ~35%); face-surface details land fully. Put
+  neck and jaw-border detail into a post-build mesh or normal-map edit.
+- Lower an upper eyelid with a forward component as well as down, or the cornea bulge pokes
+  through the lid (a dark notch, then a scalloped lid line). Check a zoomed eye crop before saving.
+- Creator-preview grooms vanish after a wardrobe or colour change until the binding rebuilds
+  (minutes, silently); a preview spawned after an Editor restart has none until
+  `assemble_for_preview`. Re-assemble, wait at least 3 minutes before judging hair, and restart the
+  Editor if bindings never finish (`Waiting for groom bindings to be ready 0/1`).
+- `reload_packages` on a character while its edit session is open has crashed the Editor and left
+  Python unstable: release it first (`RemoveObjectToEdit` on the editor subsystem), then reload.
+- Matching face landmarks is not likeness: proportions can match within a few percent while jaw,
+  chin, nose and lid forms are visibly wrong, and a photo-over-render blend hides gaps. Judge form
+  side by side at equal pupil scale under matched light; use landmarks for proportions only.
+- Image-to-3D heads are not likeness targets: generated heads drift toward a generic face and
+  scored further from the references than the MetaHuman. A multi-view head also has arbitrary
+  scale and roll: scale by pupil distance, level the roll from the irises, set depth by the median
+  midline-profile offset, and treat solid-mesh hair widths as hair, not skull.
