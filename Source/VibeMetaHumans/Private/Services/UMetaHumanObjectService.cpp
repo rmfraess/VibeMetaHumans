@@ -52,46 +52,6 @@ namespace
 	}
 }
 
-FString UMetaHumanObjectService::GetProperties(const FString& ObjectPath, const TArray<FString>& PropertyNames)
-{
-	UObject* Object = VmhAssets::Load(ObjectPath);
-	if (!Object)
-	{
-		return VmhJson::Error(TEXT("OBJECT_NOT_FOUND"), FString::Printf(TEXT("No object at %s"), *ObjectPath));
-	}
-	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
-	Out->SetStringField(TEXT("object"), Object->GetPathName());
-	Out->SetStringField(TEXT("class"), Object->GetClass()->GetPathName());
-	Out->SetObjectField(TEXT("properties"), VmhJson::ObjectToJson(Object, PropertyNames));
-	return VmhJson::Ok(Out);
-}
-
-FString UMetaHumanObjectService::SetProperties(const FString& ObjectPath, const FString& JsonPatch)
-{
-	UObject* Object = VmhAssets::Load(ObjectPath);
-	if (!Object)
-	{
-		return VmhJson::Error(TEXT("OBJECT_NOT_FOUND"), FString::Printf(TEXT("No object at %s"), *ObjectPath));
-	}
-	FString ParseError;
-	TSharedPtr<FJsonObject> Patch = VmhJson::Parse(JsonPatch, ParseError);
-	if (!Patch.IsValid())
-	{
-		return VmhJson::Error(TEXT("INVALID_JSON"), ParseError);
-	}
-	TArray<FString> Changed;
-	FString Error;
-	if (!VmhJson::PatchObject(Object, Patch, Changed, Error))
-	{
-		return VmhJson::Error(TEXT("PATCH_FAILED"), Error);
-	}
-	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
-	Out->SetStringField(TEXT("object"), Object->GetPathName());
-	Out->SetArrayField(TEXT("changed"), VmhJson::StringArray(Changed));
-	Out->SetObjectField(TEXT("properties"), VmhJson::ObjectToJson(Object, Changed));
-	return VmhJson::Ok(Out);
-}
-
 FString UMetaHumanObjectService::CallFunction(const FString& ClassPath, const FString& FunctionName, const FString& ArgsJson)
 {
 	UClass* Class = VmhJson::FindClass(ClassPath);
@@ -220,19 +180,3 @@ FString UMetaHumanObjectService::DescribeStruct(const FString& StructPath)
 	return VmhJson::Ok(Out);
 }
 
-FString UMetaHumanObjectService::SaveAsset(const FString& AssetPath)
-{
-	UObject* Asset = VmhAssets::Load(AssetPath);
-	if (!Asset)
-	{
-		return VmhJson::Error(TEXT("ASSET_NOT_FOUND"), FString::Printf(TEXT("No asset at %s"), *AssetPath));
-	}
-	FString Error;
-	if (!VmhAssets::Save(Asset, Error))
-	{
-		return VmhJson::Error(TEXT("SAVE_FAILED"), Error);
-	}
-	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
-	Out->SetStringField(TEXT("asset"), Asset->GetPathName());
-	return VmhJson::Ok(Out);
-}
