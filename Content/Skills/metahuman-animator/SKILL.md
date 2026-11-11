@@ -48,10 +48,12 @@ truncation flag. ARKit-mode takes have no depth and use the MonoFootage route.
    completion and use the returned capture-data asset, not a guessed path. Call through
    `vibeue.exec_tool(toolset, tool, args)` and inspect `vibeue.get_toolset_schema(toolset)` for
    parameters and async result handling. Good video has a well-lit, forward-facing face.
-2. For depth, create an Identity using `ident.create_identity_from_footage`; auto-rig is asynchronous,
-   so poll `ident.get_status` until rigging completes and DNA exists. Run
-   `MetaHumanAnimatorToolset.MetaHumanAnimatorIdentityTools.PrepareIdentityForPerformance` and wait
-   for its result before processing. To seed a character from the Identity, use the native
+2. For depth, use `MetaHumanAnimatorToolset.MetaHumanAnimatorIdentityTools` via `call_tool` or
+   `vibeue.exec_tool`: create the Identity from footage (inspect the toolset schema for its exact
+   name) → `PromoteAndTrackFrame` → `ConformIdentityFace`
+   → `GenerateIdentityRig` → optionally `FitIdentityTeeth` → `PrepareIdentityForPerformance`.
+   These are asynchronous: wait for each result and use `InspectIdentity` to inspect state; confirm
+   rigging has completed and DNA exists before preparing and processing. To seed a character from the Identity, use the native
    `unreal.MetaHumanCharacterEditorSubsystem.import_from_identity` in an acquired edit session.
    Identity auto-rig requires Epic login; `unreal.MetaHumanIdentity.log_in_to_auto_rig_service` is
    an instance method on the loaded Identity. Body type index 1–6 picks the preview preset.

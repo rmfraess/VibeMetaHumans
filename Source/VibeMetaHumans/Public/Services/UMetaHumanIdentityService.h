@@ -20,10 +20,10 @@
  * MonoFootage performances instead.
  *
  * Python Usage:
- *   svc = unreal.MetaHumanIdentityService
- *   r = svc.create_identity_from_footage("/Game/MHA", "ID_Kevin", "/Game/MHA/Take01_FootageCaptureData", 120, 1, True, False)
- *   svc.get_status("/Game/MHA/ID_Kevin")                 # poll auto_rig_in_progress until false and has_dna is true
- *   # Train predictive solvers with MetaHumanAnimatorToolset.MetaHumanAnimatorIdentityTools.PrepareIdentityForPerformance.
+ *   # Via call_tool or vibeue.exec_tool, await each MetaHumanAnimatorToolset.MetaHumanAnimatorIdentityTools step:
+ *   # CreateIdentityFromFootage -> PromoteAndTrackFrame -> ConformIdentityFace -> GenerateIdentityRig
+ *   # -> optional FitIdentityTeeth -> PrepareIdentityForPerformance. InspectIdentity reads state;
+ *   # confirm rigging and DNA before preparing for performance.
  */
 UCLASS(BlueprintType)
 class VIBEMETAHUMANS_API UMetaHumanIdentityService : public UToolsetDefinition
@@ -31,17 +31,6 @@ class VIBEMETAHUMANS_API UMetaHumanIdentityService : public UToolsetDefinition
 	GENERATED_BODY()
 
 public:
-	/**
-	 * Create an Identity from a depth Footage Capture Data asset: adds a Face part and a Neutral pose, promotes
-	 * NeutralFrame, tracks it, conforms the template mesh, sets the body type index (1-6), then optionally sends the
-	 * auto-rig request (async, needs Epic login) and/or trains the predictive solvers (only valid once DNA exists).
-	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Identity")
-	static FString CreateIdentityFromFootage(const FString& PackagePath, const FString& AssetName, const FString& CaptureDataPath, int32 NeutralFrame, int32 BodyTypeIndex = 1, bool bRequestAutoRig = true, bool bPrepareForPerformance = false);
-
-	/** Create an Identity from a .dna file (+ optional brows .json) and optionally prepare it for performance. */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Identity")
-	static FString CreateIdentityFromDna(const FString& PackagePath, const FString& AssetName, const FString& DnaFilePath, const FString& BrowsJsonPath, bool bPrepareForPerformance = true);
 
 	/** Status JSON: logged_in, auto_rig_in_progress, tracking_in_progress, has_dna, has_predictive_solvers, conformal_rig_valid, poses/frames, body type, diagnostics. */
 	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Identity")
