@@ -67,18 +67,6 @@ public:
 	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
 	static FString GetSaveStatus(const FString& CharacterPath);
 
-	// =================================================================
-	// Look: skin, eyes, makeup, head model, face evaluation
-	// =================================================================
-
-	/** Read a settings section as JSON. Section: skin | eyes | makeup | head | face_evaluation | viewport. */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
-	static FString GetSettings(const FString& CharacterPath, const FString& Section);
-
-	/** Set iris colour. U = temperature (0 cool blue/grey .. 1 warm brown), V = brightness (0 dark .. 1 light). Eye: both | left | right. */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
-	static FString SetEyeColor(const FString& CharacterPath, float U, float V, const FString& Eye);
-
 	/** Switch to a fixed legacy body type (f_med_nrw, m_tal_ovw, ...) or back to BlendableBody. See MetaHumanSetupService.get_enum_options. */
 	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
 	static FString SetBodyType(const FString& CharacterPath, const FString& BodyType);
@@ -86,25 +74,6 @@ public:
 	/** Reset the face back to the archetype (removes sculpting; keeps skin/eyes settings). */
 	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
 	static FString ResetFace(const FString& CharacterPath);
-
-	// =================================================================
-	// Wardrobe (hair, brows, lashes, beard, outfits)
-	// =================================================================
-
-	/** Slots, the items available in the character's collection, and the current selection per slot. */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
-	static FString GetWardrobe(const FString& CharacterPath);
-
-	/**
-	 * Add a Wardrobe Item asset (e.g. /MetaHumanCharacter/Optional/Grooms/Bindings/Hair/WI_Hair_L_StraightBangs) to a slot
-	 * (Hair, Eyebrows, Eyelashes, Mustache, Beard, Peachfuzz, Outfits) and optionally select it.
-	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
-	static FString AddWardrobeItem(const FString& CharacterPath, const FString& SlotName, const FString& WardrobeItemPath, bool bSelect = true);
-
-	/** Select an already-added wardrobe item in a slot (empty WardrobeItemPath clears the slot). */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
-	static FString SelectWardrobeItem(const FString& CharacterPath, const FString& SlotName, const FString& WardrobeItemPath);
 
 	/**
 	 * The Creator's per-item settings of the worn wardrobe items, read from the character (not a built Blueprint):
@@ -224,10 +193,6 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
 	static FString AttachStaticMeshToBlueprint(const FString& BlueprintPath, const FString& ComponentName, const FString& StaticMeshPath, const FString& ParentComponentName, const FString& SocketName, FVector RelativeLocation, FRotator RelativeRotation);
-
-	/** Remove a component (by name) from a Blueprint's construction script, promoting its children. Compiles; marks the Blueprint dirty. */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
-	static FString RemoveComponentFromBlueprint(const FString& BlueprintPath, const FString& ComponentName);
 
 	/**
 	 * Add a GroomComponent under a built MetaHuman Blueprint's TargetComponent (default "Face"), bound to it:

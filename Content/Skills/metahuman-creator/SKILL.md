@@ -78,14 +78,20 @@ grooms under `/Game/MetaHumans/<Name>`.
 4. Look: skin tone is lightness and redness; use the native session tool above or read
    `character.skin_settings`, modify the copy and call `sub.commit_skin_settings(character, settings)`.
    Do likewise with eyes, makeup and head settings and their matching subsystem commit functions.
-   `set_eye_color` remains available; `get_settings` or `MetaHumanObjectService.describe_struct`
+   For eyes, read `character.get_editor_property("eyes_settings")`, edit the struct and call
+   `sub.commit_eyes_settings(character, settings)`. `MetaHumanObjectService.describe_struct`
    can help inspect shapes. Native commits use structs, not the former JSON patch.
-5. Wardrobe: `get_wardrobe(c)` lists slots, items in the collection and the current selection. Slots and the
+5. Wardrobe: acquire an edit session with `sub.try_add_object_to_edit(c)`, then `pc = sub.get_preview_collection(c)`.
+   `pc.get_slot_names()` lists slots; `pc.get_default_instance().get_slot_selections()` lists current
+   slot names and selected items. Slots and the
    principal asset each one's items wrap: `Hair, Eyebrows, Eyelashes, Mustache, Beard, Peachfuzz`
    (`GroomBindingAsset`), `Outfits` with its user-facing `Top Garment` / `Bottom Garment` (`ChaosOutfitAsset`),
-   `SkeletalMesh` (`SkeletalMesh`, skeletal clothing, multi-select). `add_wardrobe_item(c, "Hair",
-   "/MetaHumanCharacter/Optional/Grooms/Bindings/Hair/WI_Hair_L_StraightBangs", True)` adds and selects;
-   `select_wardrobe_item(c, "Hair", "")` clears a slot. Selecting REPLACES the slot's selection
+   `SkeletalMesh` (`SkeletalMesh`, skeletal clothing, multi-select). Load a wardrobe item `wi`, then
+   `key = pc.try_add_item_from_wardrobe_item("Hair", wi)` (for an existing item use
+   `pc.get_item_keys_for_wardrobe_item(wi)`); select via
+   `pc.get_default_instance().set_single_slot_selection("Hair", key)`. Clear with
+   `unreal.MetaHumanPaletteItemKey()` as the key. Commit and update the preview with
+   `sub.on_edit_preview_collection(c); sub.assemble_for_preview(c)`. Selecting REPLACES the slot's selection
    (`SetSingleSlotSelection`), so layering several `SkeletalMesh` pieces needs the instance's
    `try_add_slot_selection` (no service tool yet). Items come from
    `EditorToolset.AssetToolset.FindAssets` (inspect its schema; search the optional wardrobe folders;
@@ -137,7 +143,7 @@ grooms under `/Game/MetaHumans/<Name>`.
 
 ## Hair on a built MetaHuman (2026-10-07)
 
-A groom from `add_wardrobe_item` (step 5) is baked into the FIRST `build()`. To add, swap or layer a
+A groom added to the preview collection (step 5) is baked into the FIRST `build()`. To add, swap or layer a
 groom on an ALREADY-BUILT Blueprint without rebuilding the whole character (a working recipe:
 a second "spiky crown" groom layered over the base fringe, keeping every other polish round's work):
 
@@ -161,7 +167,10 @@ copies an existing groom component's override materials onto the new one's match
 then by position) so a dyed/tinted look carries over. `bSaveBinding=True` (the default) saves the
 duplicated binding; pass `False` and save it yourself **at least a minute later** if you are about to
 make several such calls in a row - saving a binding mid-build can hang the editor the same way a
-Creator save can. `remove_component_from_blueprint(bp, "HairTop")` takes it back off.
+Creator save can. To remove `HairTop`, gather handles with
+`subsys = unreal.get_engine_subsystem(unreal.SubobjectDataSubsystem)` and
+`subsys.k2_gather_subobject_data_for_blueprint(bp)`, find the named target handle, then call
+`subsys.delete_subobject(handles[0], target_handle, bp)` using the root handle as context.
 
 Full signatures: `add_groom_to_blueprint(bp, component, groom_or_item, target_component="Face",
 material_from_component="", save_binding=True, socket_name="", inverse_socket_transform=False,
@@ -251,8 +260,8 @@ space, copy that binding and its item, point them at the custom groom, and put t
    skeleton (MetaHuman verification checks it) and is not refit to the body; Chaos outfits are, and warn without a
    `BodyHiddenFaceMapTexture`. Per source the Creator's "Individual Assets" drop box wraps a dropped asset with the
    fallback pipeline from the settings' default asset pipelines - not tested.
-8. **Wear and colour** with step 5's tools: `add_wardrobe_item(c, "Hair", WI, True)` (works by path, registered or
-   not), then `set_wardrobe_item_parameters` - a new groom wears the default auburn until coloured; which of the
+8. **Wear and colour** using step 5's preview-collection route with the loaded `WI` asset,
+   then `set_wardrobe_item_parameters` - a new groom wears the default auburn until coloured; which of the
    Ombre / Regions / Highlights groups it offers follows the copied pipeline's flags (step 5).
    Find optional-content or project wardrobe items with `EditorToolset.AssetToolset.FindAssets`. Wardrobe changes do not need the rig removed.
 9. **Strands only, so far.** A custom Alembic groom has no card or mesh LODs and no baked texture, while the copied
@@ -281,7 +290,8 @@ w.set_editor_property("principal_asset", pa)
 assert w.get_editor_property("pipeline")                        # the copied groom pipeline
 # call 2, later: save
 for a in (GROOM, BIND, WI): eal.save_asset(a, only_if_is_dirty=False)
-# then: mh.add_wardrobe_item(c, "Hair", WI, True); mh.set_wardrobe_item_parameters(c, "Hair", '{"Melanin":0.3}')
+# then: add/select the loaded WI using step 5, commit the preview collection,
+# and call mh.set_wardrobe_item_parameters(c, "Hair", '{"Melanin":0.3}')
 ```
 
 Raw import (explicit conversion) and the groom-struct rule - read the array with `get_editor_property`, edit nested
@@ -420,7 +430,7 @@ Save with `save_deferred` and verify `get_save_status` before treating the asset
   are rejected afterwards; set body shape first.
 - Wardrobe item paths must be Wardrobe Item assets (`WI_*`), not groom or cloth assets directly
   (**Custom hair as a Creator wardrobe item** wraps a custom groom in one).
-- Without the optional content `add_wardrobe_item` has nothing to add and `create_character` with a
+- Without the optional content the built-in wardrobe items are unavailable and `create_character` with a
   preset path fails with `PRESET_NOT_FOUND`; create from the blank template and say why.
 - A build can take a minute or more (texture bakes, groom bindings). Do not call it in a loop.
 - The Live Link / Animator inputs live on the **built** Blueprint, not on the preview actor.

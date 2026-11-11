@@ -179,15 +179,6 @@ namespace
 		}
 	}
 
-	FString ImportErrorName(EImportErrorCode Code)
-	{
-		if (const UEnum* Enum = StaticEnum<EImportErrorCode>())
-		{
-			return Enum->GetNameStringByValue(static_cast<int64>(Code));
-		}
-		return FString::FromInt(static_cast<int32>(Code));
-	}
-
 	/** Copy of a struct UPROPERTY on an object, by name (so we never depend on member access). */
 	template <typename TStruct>
 	bool ReadStruct(UObject* Object, const TCHAR* PropertyName, TStruct& Out, FString& OutError)
@@ -202,54 +193,12 @@ namespace
 		return true;
 	}
 
-	bool WriteStruct(UObject* Object, const TCHAR* PropertyName, const UScriptStruct* Type, const void* Value, FString& OutError)
-	{
-		FStructProperty* Prop = CastField<FStructProperty>(Object->GetClass()->FindPropertyByName(PropertyName));
-		if (!Prop || Prop->Struct != Type)
-		{
-			OutError = FString::Printf(TEXT("%s has no %s struct property"), *Object->GetClass()->GetName(), PropertyName);
-			return false;
-		}
-		Object->Modify();
-		Prop->CopyCompleteValue(Prop->ContainerPtrToValuePtr<void>(Object), Value);
-		return true;
-	}
-
-	TSharedPtr<FJsonObject> ConstraintsToJson(const TArray<FMetaHumanCharacterBodyConstraint>& Constraints)
-	{
-		TSharedPtr<FJsonObject> Out = VmhJson::Obj();
-		TArray<TSharedPtr<FJsonValue>> Items;
-		for (const FMetaHumanCharacterBodyConstraint& C : Constraints)
-		{
-			TSharedPtr<FJsonObject> Item = VmhJson::Obj();
-			Item->SetStringField(TEXT("name"), C.Name.ToString());
-			Item->SetBoolField(TEXT("active"), C.bIsActive);
-			Item->SetNumberField(TEXT("target"), C.TargetMeasurement);
-			Item->SetNumberField(TEXT("min"), C.MinMeasurement);
-			Item->SetNumberField(TEXT("max"), C.MaxMeasurement);
-			const float Range = C.MaxMeasurement - C.MinMeasurement;
-			Item->SetNumberField(TEXT("normalized"), Range > KINDA_SMALL_NUMBER ? (C.TargetMeasurement - C.MinMeasurement) / Range : 0.f);
-			Items.Add(MakeShared<FJsonValueObject>(Item));
-		}
-		Out->SetArrayField(TEXT("constraints"), Items);
-		return Out;
-	}
-
 	/** Re-align the neck after a body change (what Epic's MetaHumanGenerator does via ResetNeckToBody). */
 	void ResetNeckToBody(UMetaHumanCharacterEditorSubsystem* Subsystem, UMetaHumanCharacter* Character)
 	{
 		TSharedRef<FMetaHumanCharacterIdentity::FState> NewState = Subsystem->CopyFaceState(Character);
 		NewState->ResetNeckRegion();
 		Subsystem->ApplyFaceState(Character, NewState);
-	}
-
-	TSharedPtr<FJsonObject> ItemKeyToJson(UMetaHumanCharacterPalette* Palette, const FMetaHumanPaletteItemKey& Key)
-	{
-		TSharedPtr<FJsonObject> Out = VmhJson::StructToJson(FMetaHumanPaletteItemKey::StaticStruct(), &Key);
-		Out->SetStringField(TEXT("asset_name"), Key.ToAssetNameString());
-		Out->SetStringField(TEXT("slot"), UMetaHumanCollectionBlueprintLibrary::GetItemSlotName(Palette, Key).ToString());
-		Out->SetStringField(TEXT("display_name"), UMetaHumanCollectionBlueprintLibrary::GetItemDisplayName(Palette, Key).ToString());
-		return Out;
 	}
 
 	FString CharacterResult(const FEditContext& Ctx, TSharedPtr<FJsonObject> Extra = nullptr)
@@ -373,13 +322,6 @@ namespace
 		return Names;
 	}
 
-	TArray<TSharedPtr<FJsonValue>> IntArray(const TArray<int32>& Values)
-	{
-		TArray<TSharedPtr<FJsonValue>> Out;
-		for (int32 V : Values) { Out.Add(MakeShared<FJsonValueNumber>(V)); }
-		return Out;
-	}
-
 	// =====================================================================
 	// Deferred save / build (2026-10-07): a Creator save, or a build, made in the same call that queued the async
 	// work it waits on deadlocked the shared editor (UPackage::Save / BuildMetaHuman sleep-polling for work only the
@@ -420,62 +362,6 @@ namespace
 		return FDateTime::Now().ToString(TEXT("%H:%M:%S"));
 	}
 
-	/** The groom slots (Hair, Eyebrows, ...) a character's wardrobe selections fill right now. */
-	TArray<FString> WornGroomSlots(UMetaHumanCharacter* Character)
-	{
-		static const TArray<FString> GroomSlots = { TEXT("Hair"), TEXT("Eyebrows"), TEXT("Eyelashes"), TEXT("Beard"), TEXT("Mustache"), TEXT("Peachfuzz") };
-		TArray<FString> Worn;
-		FString Unused;
-		if (UMetaHumanCollection* Collection = LiveCollection(GetSubsystem(Unused), Character))
-		{
-			for (const FMetaHumanPipelineSlotSelectionData& Data : Collection->GetMutableDefaultInstance()->GetSlotSelectionData())
-			{
-				const FString Slot = Data.Selection.SlotName.ToString();
-				if (!Data.Selection.SelectedItem.IsNull() && GroomSlots.Contains(Slot))
-				{
-					Worn.Add(Slot);
-				}
-			}
-		}
-		return Worn;
-	}
-
-	/**
-	 * Which Creator sculpt landmarks look like ears, neck or skull-top FROM THEIR POSITIONS (the landmark set
-	 * differs per preset - Lorenzo 79, Orlando 125 - so this is never a fixed index list; Master Smith's
-	 * face_fit.py auto_exclude, 2026-10-06). Y grows toward the face (the nose tip is the max); Z is up.
-	 */
-	void ClassifyLandmarks(const TArray<FVector>& L, TArray<int32>& OutEars, TArray<int32>& OutNeck, TArray<int32>& OutSkull)
-	{
-		OutEars.Reset(); OutNeck.Reset(); OutSkull.Reset();
-		if (L.Num() == 0) { return; }
-		float YMax = -UE_BIG_NUMBER;
-		for (const FVector& P : L) { YMax = FMath::Max(YMax, static_cast<float>(P.Y)); }
-		TArray<int32> Behind, Front;
-		for (int32 i = 0; i < L.Num(); ++i)
-		{
-			if (L[i].Y < YMax - 13.8) { Behind.Add(i); }
-			if (L[i].Y > YMax - 6.0) { Front.Add(i); }
-		}
-		float ChinZ = UE_BIG_NUMBER, TopZ = -UE_BIG_NUMBER;
-		for (int32 i : Front) { ChinZ = FMath::Min(ChinZ, static_cast<float>(L[i].Z)); }
-		for (int32 i = 0; i < L.Num(); ++i)
-		{
-			if (L[i].Y > YMax - 5.0) { TopZ = FMath::Max(TopZ, static_cast<float>(L[i].Z)); }
-		}
-		float MaxAbsXBehind = 0.f;
-		for (int32 i : Behind) { MaxAbsXBehind = FMath::Max(MaxAbsXBehind, FMath::Abs(static_cast<float>(L[i].X))); }
-		for (int32 i = 0; i < L.Num(); ++i)
-		{
-			const FVector& P = L[i];
-			if (P.Z < ChinZ - 1.0) { OutNeck.Add(i); }
-			else if (P.Z > TopZ + 1.0) { OutSkull.Add(i); }
-			else if (Behind.Contains(i) && MaxAbsXBehind > KINDA_SMALL_NUMBER && FMath::Abs(static_cast<float>(P.X)) > 0.5f * MaxAbsXBehind)
-			{
-				OutEars.Add(i);
-			}
-		}
-	}
 }
 
 // =====================================================================
@@ -752,98 +638,7 @@ namespace
 {
 	enum class ESection { Skin, Eyes, Makeup, Head, FaceEvaluation, Viewport, Unknown };
 
-	ESection ParseSection(const FString& Section)
-	{
-		const FString S = Section.TrimStartAndEnd().ToLower();
-		if (S == TEXT("skin")) return ESection::Skin;
-		if (S == TEXT("eyes")) return ESection::Eyes;
-		if (S == TEXT("makeup")) return ESection::Makeup;
-		if (S == TEXT("head") || S == TEXT("head_model") || S == TEXT("teeth") || S == TEXT("eyelashes")) return ESection::Head;
-		if (S == TEXT("face_evaluation") || S == TEXT("face")) return ESection::FaceEvaluation;
-		if (S == TEXT("viewport")) return ESection::Viewport;
-		return ESection::Unknown;
-	}
-
-	const TCHAR* SectionProperty(ESection Section)
-	{
-		switch (Section)
-		{
-		case ESection::Skin: return TEXT("SkinSettings");
-		case ESection::Eyes: return TEXT("EyesSettings");
-		case ESection::Makeup: return TEXT("MakeupSettings");
-		case ESection::Head: return TEXT("HeadModelSettings");
-		case ESection::FaceEvaluation: return TEXT("FaceEvaluationSettings");
-		case ESection::Viewport: return TEXT("ViewportSettings");
-		default: return TEXT("");
-		}
-	}
-
 	const FString SectionError = TEXT("Section must be one of: skin, eyes, makeup, head, face_evaluation, viewport");
-}
-
-FString UMetaHumanCharacterService::GetSettings(const FString& CharacterPath, const FString& Section)
-{
-	const ESection S = ParseSection(Section);
-	if (S == ESection::Unknown)
-	{
-		return VmhJson::Error(TEXT("UNKNOWN_SECTION"), SectionError);
-	}
-	FEditContext Ctx = OpenForEdit(CharacterPath, false);
-	if (!Ctx.IsValid())
-	{
-		return Ctx.ToError();
-	}
-	FStructProperty* Prop = CastField<FStructProperty>(Ctx.Character->GetClass()->FindPropertyByName(SectionProperty(S)));
-	if (!Prop)
-	{
-		return VmhJson::Error(TEXT("NO_PROPERTY"), FString::Printf(TEXT("Character has no %s"), SectionProperty(S)));
-	}
-	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
-	Out->SetStringField(TEXT("character"), Ctx.Character->GetPathName());
-	Out->SetStringField(TEXT("section"), Section);
-	Out->SetStringField(TEXT("struct"), Prop->Struct->GetName());
-	Out->SetObjectField(TEXT("settings"), VmhJson::StructToJson(Prop->Struct, Prop->ContainerPtrToValuePtr<void>(Ctx.Character)));
-	return VmhJson::Ok(Out);
-}
-
-FString UMetaHumanCharacterService::SetEyeColor(const FString& CharacterPath, float U, float V, const FString& Eye)
-{
-	FEditContext Ctx = OpenForEdit(CharacterPath, true);
-	if (!Ctx.IsValid())
-	{
-		return Ctx.ToError();
-	}
-	FString Err;
-	FMetaHumanCharacterEyesSettings Eyes;
-	if (!ReadStruct(Ctx.Character, TEXT("EyesSettings"), Eyes, Err))
-	{
-		return VmhJson::Error(TEXT("NO_PROPERTY"), Err);
-	}
-	const FString Which = Eye.TrimStartAndEnd().ToLower();
-	const bool bLeft = Which.IsEmpty() || Which == TEXT("both") || Which == TEXT("left");
-	const bool bRight = Which.IsEmpty() || Which == TEXT("both") || Which == TEXT("right");
-	if (!bLeft && !bRight)
-	{
-		return VmhJson::Error(TEXT("BAD_EYE"), TEXT("Eye must be both, left or right"));
-	}
-	const float CU = FMath::Clamp(U, 0.f, 1.f);
-	const float CV = FMath::Clamp(V, 0.f, 1.f);
-	auto Apply = [CU, CV](FMetaHumanCharacterEyeProperties& P)
-	{
-		P.Iris.PrimaryColorU = CU;
-		P.Iris.PrimaryColorV = CV;
-		P.Iris.SecondaryColorU = CU;
-		P.Iris.SecondaryColorV = CV;
-	};
-	if (bLeft) Apply(Eyes.EyeLeft);
-	if (bRight) Apply(Eyes.EyeRight);
-	Ctx.Subsystem->CommitEyesSettings(Ctx.Character, Eyes);
-
-	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
-	Out->SetNumberField(TEXT("u"), CU);
-	Out->SetNumberField(TEXT("v"), CV);
-	Out->SetStringField(TEXT("eye"), Which.IsEmpty() ? TEXT("both") : Which);
-	return CharacterResult(Ctx, Out);
 }
 
 FString UMetaHumanCharacterService::SetBodyType(const FString& CharacterPath, const FString& BodyType)
@@ -893,132 +688,6 @@ FString UMetaHumanCharacterService::GetAutoRigStatus(const FString& CharacterPat
 	Out->SetStringField(TEXT("status"), bRunning ? TEXT("running") : (RigState == EMetaHumanCharacterRigState::Rigged ? TEXT("done") : TEXT("failed_or_not_requested")));
 	Out->SetBoolField(TEXT("running"), bRunning);
 	Out->SetBoolField(TEXT("has_face_dna"), Ctx.Character->HasFaceDNA());
-	return CharacterResult(Ctx, Out);
-}
-
-// =====================================================================
-// Wardrobe
-// =====================================================================
-
-FString UMetaHumanCharacterService::GetWardrobe(const FString& CharacterPath)
-{
-	FEditContext Ctx = OpenForEdit(CharacterPath, false);
-	if (!Ctx.IsValid())
-	{
-		return Ctx.ToError();
-	}
-	UMetaHumanCollection* Collection = LiveCollection(Ctx.Subsystem, Ctx.Character);
-	if (!Collection)
-	{
-		return VmhJson::Error(TEXT("NO_COLLECTION"), TEXT("Character has no internal collection"));
-	}
-	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
-	Out->SetBoolField(TEXT("from_edit_preview"), Collection != Ctx.Character->GetInternalCollection());
-	Out->SetArrayField(TEXT("slots"), VmhJson::NameArray(UMetaHumanCollectionBlueprintLibrary::GetSlotNames(Collection)));
-
-	TArray<TSharedPtr<FJsonValue>> Items;
-	for (const FMetaHumanPaletteItemKey& Key : UMetaHumanCollectionBlueprintLibrary::GetAllItemKeys(Collection))
-	{
-		Items.Add(MakeShared<FJsonValueObject>(ItemKeyToJson(Collection, Key)));
-	}
-	Out->SetArrayField(TEXT("items"), Items);
-
-	TArray<TSharedPtr<FJsonValue>> Selections;
-	for (const FMetaHumanPipelineSlotSelectionData& Data : Collection->GetMutableDefaultInstance()->GetSlotSelectionData())
-	{
-		TSharedPtr<FJsonObject> Item = VmhJson::Obj();
-		Item->SetStringField(TEXT("slot"), Data.Selection.SlotName.ToString());
-		Item->SetStringField(TEXT("item"), Data.Selection.SelectedItem.ToAssetNameString());
-		Selections.Add(MakeShared<FJsonValueObject>(Item));
-	}
-	Out->SetArrayField(TEXT("selections"), Selections);
-	Out->SetStringField(TEXT("character"), Ctx.Character->GetPathName());
-	return VmhJson::Ok(Out);
-}
-
-FString UMetaHumanCharacterService::AddWardrobeItem(const FString& CharacterPath, const FString& SlotName, const FString& WardrobeItemPath, bool bSelect)
-{
-	UMetaHumanWardrobeItem* Item = VmhAssets::Load<UMetaHumanWardrobeItem>(WardrobeItemPath);
-	if (!Item)
-	{
-		return VmhJson::Error(TEXT("WARDROBE_ITEM_NOT_FOUND"), FString::Printf(TEXT("No MetaHuman Wardrobe Item at %s (use MetaHumanSetupService.list_assets('wardrobe'))"), *WardrobeItemPath));
-	}
-	FEditContext Ctx = OpenForEdit(CharacterPath, true);
-	if (!Ctx.IsValid())
-	{
-		return Ctx.ToError();
-	}
-	UMetaHumanCollection* Collection = LiveCollection(Ctx.Subsystem, Ctx.Character);
-	if (!Collection)
-	{
-		return VmhJson::Error(TEXT("NO_COLLECTION"), TEXT("Character has no internal collection"));
-	}
-	const FName Slot(*SlotName);
-	FMetaHumanPaletteItemKey Key;
-	TArray<FMetaHumanPaletteItemKey> Existing = UMetaHumanCollectionBlueprintLibrary::GetItemKeysForWardrobeItem(Collection, Item);
-	if (Existing.Num() > 0)
-	{
-		Key = Existing[0];
-	}
-	else if (!Collection->TryAddItemFromWardrobeItem(Slot, Item, Key))
-	{
-		TArray<FName> Slots = UMetaHumanCollectionBlueprintLibrary::GetSlotNames(Collection);
-		TArray<FString> SlotStrings;
-		for (const FName& S : Slots) SlotStrings.Add(S.ToString());
-		return VmhJson::Error(TEXT("ADD_ITEM_FAILED"), FString::Printf(TEXT("Could not add %s to slot '%s' (incompatible item or unknown slot). Slots: %s"), *Item->GetName(), *SlotName, *FString::Join(SlotStrings, TEXT(", "))));
-	}
-
-	if (bSelect)
-	{
-		Collection->GetMutableDefaultInstance()->SetSingleSlotSelection(Slot, Key);
-	}
-	if (bSelect || Existing.Num() == 0)
-	{
-		CommitWardrobeEdit(Ctx, Collection);
-	}
-
-	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
-	Out->SetStringField(TEXT("slot"), SlotName);
-	Out->SetStringField(TEXT("wardrobe_item"), Item->GetPathName());
-	Out->SetObjectField(TEXT("item_key"), ItemKeyToJson(Collection, Key));
-	Out->SetBoolField(TEXT("selected"), bSelect);
-	return CharacterResult(Ctx, Out);
-}
-
-FString UMetaHumanCharacterService::SelectWardrobeItem(const FString& CharacterPath, const FString& SlotName, const FString& WardrobeItemPath)
-{
-	FEditContext Ctx = OpenForEdit(CharacterPath, true);
-	if (!Ctx.IsValid())
-	{
-		return Ctx.ToError();
-	}
-	UMetaHumanCollection* Collection = LiveCollection(Ctx.Subsystem, Ctx.Character);
-	if (!Collection)
-	{
-		return VmhJson::Error(TEXT("NO_COLLECTION"), TEXT("Character has no internal collection"));
-	}
-	const FName Slot(*SlotName);
-	FMetaHumanPaletteItemKey Key; // null key clears the slot
-	if (!WardrobeItemPath.IsEmpty())
-	{
-		UMetaHumanWardrobeItem* Item = VmhAssets::Load<UMetaHumanWardrobeItem>(WardrobeItemPath);
-		if (!Item)
-		{
-			return VmhJson::Error(TEXT("WARDROBE_ITEM_NOT_FOUND"), FString::Printf(TEXT("No MetaHuman Wardrobe Item at %s"), *WardrobeItemPath));
-		}
-		TArray<FMetaHumanPaletteItemKey> Keys = UMetaHumanCollectionBlueprintLibrary::GetItemKeysForWardrobeItem(Collection, Item);
-		if (Keys.Num() == 0)
-		{
-			return VmhJson::Error(TEXT("ITEM_NOT_IN_COLLECTION"), TEXT("That wardrobe item is not in the character's collection yet; call add_wardrobe_item first"));
-		}
-		Key = Keys[0];
-	}
-	Collection->GetMutableDefaultInstance()->SetSingleSlotSelection(Slot, Key);
-	CommitWardrobeEdit(Ctx, Collection);
-
-	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
-	Out->SetStringField(TEXT("slot"), SlotName);
-	Out->SetStringField(TEXT("item"), Key.IsNull() ? TEXT("") : Key.ToAssetNameString());
 	return CharacterResult(Ctx, Out);
 }
 
@@ -2328,33 +1997,6 @@ FString UMetaHumanCharacterService::AttachStaticMeshToBlueprint(const FString& B
 	Out->SetStringField(TEXT("relative_rotation"), RelativeRotation.ToString());
 	Out->SetBoolField(TEXT("compiled"), Blueprint->Status != BS_Error);
 	Out->SetStringField(TEXT("hint"), TEXT("a placed instance made before this call keeps its old components: respawn it; save the Blueprint's package when it should stay"));
-	return VmhJson::Ok(Out);
-}
-
-FString UMetaHumanCharacterService::RemoveComponentFromBlueprint(const FString& BlueprintPath, const FString& ComponentName)
-{
-	UBlueprint* Blueprint = VmhAssets::Load<UBlueprint>(BlueprintPath);
-	if (!Blueprint || !Blueprint->SimpleConstructionScript)
-	{
-		return VmhJson::Error(TEXT("BLUEPRINT_NOT_FOUND"), FString::Printf(TEXT("No Blueprint with a construction script at %s"), *BlueprintPath));
-	}
-	USimpleConstructionScript* SCS = Blueprint->SimpleConstructionScript;
-	USCS_Node* Node = SCS->FindSCSNode(FName(*ComponentName));
-	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
-	Out->SetStringField(TEXT("blueprint"), Blueprint->GetPathName());
-	Out->SetStringField(TEXT("component"), ComponentName);
-	if (!Node)
-	{
-		Out->SetBoolField(TEXT("removed"), false);
-		Out->SetStringField(TEXT("hint"), TEXT("no such component (already removed, or never added)"));
-		return VmhJson::Ok(Out);
-	}
-	SCS->RemoveNodeAndPromoteChildren(Node);
-	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
-	FKismetEditorUtilities::CompileBlueprint(Blueprint, EBlueprintCompileOptions::SkipGarbageCollection);
-	Blueprint->MarkPackageDirty();
-	Out->SetBoolField(TEXT("removed"), true);
-	Out->SetBoolField(TEXT("compiled"), Blueprint->Status != BS_Error);
 	return VmhJson::Ok(Out);
 }
 

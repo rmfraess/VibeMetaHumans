@@ -67,7 +67,7 @@ s = json.loads(unreal.MetaHumanSetupService.get_status())
    asynchronous; `build_async` queues a build. Check the result or status before continuing or retrying.
 5. **Commit settings structs.** Read the relevant character settings struct, modify its copy, then
    call the matching native subsystem commit function. Inspect shapes with
-   `MetaHumanObjectService.describe_struct` or `MetaHumanCharacterService.get_settings`.
+   `MetaHumanObjectService.describe_struct`; read values from the character's reflected settings properties.
 6. **Keep the user's content layout.** Default output folders are `/Game/MetaHumans` (characters,
    builds) and `/Game/MHA` (capture data, identities, performances); follow the project's own
    convention when one exists.
