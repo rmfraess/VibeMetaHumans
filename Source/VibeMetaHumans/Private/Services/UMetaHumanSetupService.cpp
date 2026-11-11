@@ -132,46 +132,6 @@ FString UMetaHumanSetupService::GetStatus()
 	return VmhJson::Ok(Out);
 }
 
-FString UMetaHumanSetupService::ListAssets(const FString& Kind, const FString& SearchRoot)
-{
-	FKindInfo Info;
-	if (!ResolveKind(Kind, Info))
-	{
-		return VmhJson::Error(TEXT("UNKNOWN_KIND"),
-			TEXT("Kind must be one of: character, preset, identity, performance, capture_data, wardrobe, collection, blueprint, soundwave, animation, level_sequence"));
-	}
-	const FString Root = SearchRoot.IsEmpty() ? FString(Info.DefaultRoot) : SearchRoot;
-	const TArray<FString> Assets = VmhAssets::FindAssetsOfClass(Info.ClassPath, Root);
-
-	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
-	Out->SetStringField(TEXT("kind"), Kind);
-	Out->SetStringField(TEXT("search_root"), Root);
-	Out->SetNumberField(TEXT("count"), Assets.Num());
-	Out->SetArrayField(TEXT("assets"), VmhJson::StringArray(Assets));
-	if (Assets.Num() == 0 && Root.StartsWith(OptionalContentRoot) && !FMetaHumanCharacterEditorModule::IsOptionalMetaHumanContentInstalled())
-	{
-		Out->SetStringField(TEXT("hint"), TEXT("The MetaHuman optional content is not installed, so this folder is empty."));
-	}
-	return VmhJson::Ok(Out);
-}
-
-FString UMetaHumanSetupService::OpenInEditor(const FString& AssetPath)
-{
-	UObject* Asset = VmhAssets::Load(AssetPath);
-	if (!Asset)
-	{
-		return VmhJson::Error(TEXT("ASSET_NOT_FOUND"), FString::Printf(TEXT("No asset at %s"), *AssetPath));
-	}
-	if (!VmhAssets::OpenEditor(Asset))
-	{
-		return VmhJson::Error(TEXT("OPEN_FAILED"), FString::Printf(TEXT("Could not open an editor for %s"), *Asset->GetPathName()));
-	}
-	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
-	Out->SetStringField(TEXT("asset"), Asset->GetPathName());
-	Out->SetStringField(TEXT("class"), Asset->GetClass()->GetName());
-	return VmhJson::Ok(Out);
-}
-
 FString UMetaHumanSetupService::GetEnumOptions()
 {
 	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
