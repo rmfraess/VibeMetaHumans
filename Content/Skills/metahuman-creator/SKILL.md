@@ -437,6 +437,8 @@ Save with `save_deferred` and verify `get_save_status` before treating the asset
 - Read the engine-level reference skill `ue-metahuman-creator` (UnrealEngineSkills) when you need
   struct field semantics, pipeline internals or C++, and `ue-hair-and-grooms` for groom assets, Alembic
   import, bindings and Creator hair internals.
+- The next five gotchas (template import, eyelids, groom preview, reload) were observed in UE 5.8:
+  re-check them on the current engine before relying on the numbers.
 - Before `import_from_template`, copy or commit the character asset: restoring a face-coefficient
   snapshot afterwards does not recover the original shape (it was ~0.1 cm mean, ~0.9 cm max off).
 - `import_from_template` keeps broad shape changes but strips small neck and under-jaw features
