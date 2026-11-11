@@ -157,66 +157,6 @@ namespace
 	}
 }
 
-// =====================================================================
-// Sources
-// =====================================================================
-
-FString UMetaHumanLiveLinkService::ListVideoDevices(bool bIncludeFormats)
-{
-	TArray<FMetaHumanLiveLinkVideoDevice> Devices;
-	UMetaHumanLocalLiveLinkSourceBlueprint::GetVideoDevices(Devices, true);
-	TArray<TSharedPtr<FJsonValue>> Items;
-	for (const FMetaHumanLiveLinkVideoDevice& D : Devices)
-	{
-		TSharedPtr<FJsonObject> Item = VmhJson::Obj();
-		Item->SetStringField(TEXT("name"), D.Name);
-		Item->SetStringField(TEXT("url"), D.Url);
-		Item->SetBoolField(TEXT("media_bundle"), D.IsMediaBundle);
-		if (bIncludeFormats)
-		{
-			TArray<FMetaHumanLiveLinkVideoTrack> Tracks;
-			bool bTimedOut = false;
-			UMetaHumanLocalLiveLinkSourceBlueprint::GetVideoTracks(D, Tracks, bTimedOut, 5.f);
-			TArray<TSharedPtr<FJsonValue>> FormatItems;
-			if (Tracks.Num() > 0)
-			{
-				TArray<FMetaHumanLiveLinkVideoFormat> Formats;
-				UMetaHumanLocalLiveLinkSourceBlueprint::GetVideoFormats(Tracks[0], Formats, bTimedOut, true, 5.f);
-				for (int32 i = 0; i < Formats.Num(); ++i)
-				{
-					FormatItems.Add(MakeShared<FJsonValueObject>(VideoFormatJson(Formats[i], i)));
-				}
-			}
-			Item->SetBoolField(TEXT("timed_out"), bTimedOut);
-			Item->SetArrayField(TEXT("formats"), FormatItems);
-		}
-		Items.Add(MakeShared<FJsonValueObject>(Item));
-	}
-	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
-	Out->SetNumberField(TEXT("count"), Devices.Num());
-	Out->SetArrayField(TEXT("devices"), Items);
-	return VmhJson::Ok(Out);
-}
-
-FString UMetaHumanLiveLinkService::ListAudioDevices()
-{
-	TArray<FMetaHumanLiveLinkAudioDevice> Devices;
-	UMetaHumanLocalLiveLinkSourceBlueprint::GetAudioDevices(Devices, true);
-	TArray<TSharedPtr<FJsonValue>> Items;
-	for (const FMetaHumanLiveLinkAudioDevice& D : Devices)
-	{
-		TSharedPtr<FJsonObject> Item = VmhJson::Obj();
-		Item->SetStringField(TEXT("name"), D.Name);
-		Item->SetStringField(TEXT("url"), D.Url);
-		Item->SetBoolField(TEXT("media_bundle"), D.IsMediaBundle);
-		Items.Add(MakeShared<FJsonValueObject>(Item));
-	}
-	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
-	Out->SetNumberField(TEXT("count"), Devices.Num());
-	Out->SetArrayField(TEXT("devices"), Items);
-	return VmhJson::Ok(Out);
-}
-
 FString UMetaHumanLiveLinkService::AddVideoSource(const FString& DeviceName, const FString& SubjectName, int32 FormatIndex)
 {
 	FString Error;
@@ -331,40 +271,6 @@ FString UMetaHumanLiveLinkService::AddAudioSource(const FString& DeviceName, con
 	return VmhJson::Ok(Out);
 }
 
-FString UMetaHumanLiveLinkService::AddLiveLinkFaceSource(const FString& Address, const FString& SubjectName, int32 Port)
-{
-	FString Error;
-	if (!GetClient(Error))
-	{
-		return VmhJson::Error(TEXT("NO_LIVE_LINK"), Error);
-	}
-	if (Address.IsEmpty())
-	{
-		return VmhJson::Error(TEXT("NO_ADDRESS"), TEXT("Address is the phone's IP address shown in the Live Link Face app (e.g. 192.168.1.42)"));
-	}
-	FLiveLinkSourceHandle Source;
-	bool bOk = false;
-	ULiveLinkFaceSourceBlueprint::CreateLiveLinkFaceSource(Source, bOk);
-	if (!bOk)
-	{
-		return VmhJson::Error(TEXT("SOURCE_FAILED"), TEXT("CreateLiveLinkFaceSource failed (see Output Log)"));
-	}
-	const FString Subject = SubjectName.IsEmpty() ? TEXT("iPhone") : SubjectName;
-	bool bConnected = false;
-	ULiveLinkFaceSourceBlueprint::Connect(Source, Subject, Address, bConnected, Port);
-	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
-	Out->SetStringField(TEXT("address"), Address);
-	Out->SetNumberField(TEXT("port"), Port);
-	Out->SetStringField(TEXT("subject"), Subject);
-	Out->SetBoolField(TEXT("connect_requested"), bConnected);
-	if (!bConnected)
-	{
-		return VmhJson::Error(TEXT("CONNECT_FAILED"), TEXT("Connect returned false: check the IP, that the phone is on the same network, and that Live Link Face is open in MetaHuman Animator mode"), Out);
-	}
-	Out->SetStringField(TEXT("next"), TEXT("list_subjects until state is Connected, then bind_subject_to_actor"));
-	return VmhJson::Ok(Out);
-}
-
 FString UMetaHumanLiveLinkService::ListSources()
 {
 	FString Error;
@@ -390,25 +296,6 @@ FString UMetaHumanLiveLinkService::ListSources()
 	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
 	Out->SetNumberField(TEXT("count"), Items.Num());
 	Out->SetArrayField(TEXT("sources"), Items);
-	return VmhJson::Ok(Out);
-}
-
-FString UMetaHumanLiveLinkService::ListSubjects()
-{
-	FString Error;
-	ILiveLinkClient* Client = GetClient(Error);
-	if (!Client)
-	{
-		return VmhJson::Error(TEXT("NO_LIVE_LINK"), Error);
-	}
-	TArray<TSharedPtr<FJsonValue>> Items;
-	for (const FLiveLinkSubjectKey& Key : Client->GetSubjects(true, true))
-	{
-		Items.Add(MakeShared<FJsonValueObject>(SubjectJson(Client, Key)));
-	}
-	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
-	Out->SetNumberField(TEXT("count"), Items.Num());
-	Out->SetArrayField(TEXT("subjects"), Items);
 	return VmhJson::Ok(Out);
 }
 
@@ -442,75 +329,6 @@ FString UMetaHumanLiveLinkService::RemoveSource(const FString& SourceGuid)
 	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
 	Out->SetArrayField(TEXT("removed"), VmhJson::StringArray(Removed));
 	Out->SetNumberField(TEXT("remaining"), Client->GetSources().Num());
-	return VmhJson::Ok(Out);
-}
-
-// =====================================================================
-// Subject tuning
-// =====================================================================
-
-FString UMetaHumanLiveLinkService::CaptureNeutrals(const FString& SubjectName)
-{
-	FString Error;
-	ILiveLinkClient* Client = GetClient(Error);
-	if (!Client)
-	{
-		return VmhJson::Error(TEXT("NO_LIVE_LINK"), Error);
-	}
-	FLiveLinkSubjectKey Key;
-	UObject* Settings = GetSubjectSettingsObject(Client, SubjectName, Key, Error);
-	if (!Settings)
-	{
-		return VmhJson::Error(TEXT("SUBJECT_NOT_FOUND"), Error);
-	}
-	UMetaHumanLiveLinkSubjectSettings* MH = Cast<UMetaHumanLiveLinkSubjectSettings>(Settings);
-	if (!MH)
-	{
-		return VmhJson::Error(TEXT("NOT_METAHUMAN_SUBJECT"), FString::Printf(TEXT("Subject '%s' settings are %s, not a MetaHuman Live Link subject"), *SubjectName, *Settings->GetClass()->GetName()));
-	}
-	MH->CaptureNeutrals();
-	TSharedPtr<FJsonObject> Out = SubjectJson(Client, Key);
-	Out->SetStringField(TEXT("captured"), TEXT("neutral frame + head pose"));
-	return VmhJson::Ok(Out);
-}
-
-FString UMetaHumanLiveLinkService::SetHeadTracking(const FString& SubjectName, bool bOrientation, bool bTranslation, bool bStabilization)
-{
-	FString Error;
-	ILiveLinkClient* Client = GetClient(Error);
-	if (!Client)
-	{
-		return VmhJson::Error(TEXT("NO_LIVE_LINK"), Error);
-	}
-	FLiveLinkSubjectKey Key;
-	UObject* Settings = GetSubjectSettingsObject(Client, SubjectName, Key, Error);
-	if (!Settings)
-	{
-		return VmhJson::Error(TEXT("SUBJECT_NOT_FOUND"), Error);
-	}
-	if (UMetaHumanVideoBaseLiveLinkSubjectSettings* Video = Cast<UMetaHumanVideoBaseLiveLinkSubjectSettings>(Settings))
-	{
-		Video->SetHeadOrientation(bOrientation);
-		Video->SetHeadTranslation(bTranslation);
-		Video->SetHeadStabilization(bStabilization);
-	}
-	else
-	{
-		// Live Link Face (phone) subjects expose the same setters via reflection but a different class.
-		TSharedPtr<FJsonObject> Result;
-		TSharedPtr<FJsonObject> A = VmhJson::Obj(); A->SetBoolField(TEXT("HeadOrientation"), bOrientation);
-		TSharedPtr<FJsonObject> B = VmhJson::Obj(); B->SetBoolField(TEXT("HeadTranslation"), bTranslation);
-		FString CallError;
-		if (!VmhJson::CallObjectFunction(Settings, TEXT("SetHeadOrientation"), A, Result, CallError) ||
-			!VmhJson::CallObjectFunction(Settings, TEXT("SetHeadTranslation"), B, Result, CallError))
-		{
-			return VmhJson::Error(TEXT("NOT_SUPPORTED"), FString::Printf(TEXT("Subject '%s' (%s) has no head tracking toggles: %s"), *SubjectName, *Settings->GetClass()->GetName(), *CallError));
-		}
-	}
-	TSharedPtr<FJsonObject> Out = SubjectJson(Client, Key);
-	Out->SetBoolField(TEXT("head_orientation"), bOrientation);
-	Out->SetBoolField(TEXT("head_translation"), bTranslation);
-	Out->SetBoolField(TEXT("head_stabilization"), bStabilization);
 	return VmhJson::Ok(Out);
 }
 
@@ -726,40 +544,3 @@ FString UMetaHumanLiveLinkService::StartTakeRecording(const TArray<FString>& Sub
 #endif
 }
 
-FString UMetaHumanLiveLinkService::StopTakeRecording()
-{
-#if WITH_VMH_TAKES
-	const bool bWas = UTakeRecorderBlueprintLibrary::IsRecording();
-	if (bWas)
-	{
-		UTakeRecorderBlueprintLibrary::StopRecording();
-	}
-	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
-	Out->SetBoolField(TEXT("was_recording"), bWas);
-	if (UTakeRecorderPanel* Panel = UTakeRecorderBlueprintLibrary::GetTakeRecorderPanel())
-	{
-		Out->SetStringField(TEXT("last_recorded_sequence"), VmhAssets::PathOf(Panel->GetLastRecordedLevelSequence()));
-	}
-	Out->SetStringField(TEXT("hint"), TEXT("The recorded Level Sequence holds an animation track per subject; the AnimSequence assets are saved next to it under Cinematics/Takes."));
-	return VmhJson::Ok(Out);
-#else
-	return VmhJson::Error(TEXT("TAKES_UNAVAILABLE"), TEXT("The Takes plugin was not present when VibeMetaHumans was built"));
-#endif
-}
-
-FString UMetaHumanLiveLinkService::GetTakeRecorderStatus()
-{
-#if WITH_VMH_TAKES
-	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
-	Out->SetBoolField(TEXT("enabled"), UTakeRecorderBlueprintLibrary::IsTakeRecorderEnabled());
-	Out->SetBoolField(TEXT("recording"), UTakeRecorderBlueprintLibrary::IsRecording());
-	if (UTakeRecorderPanel* Panel = UTakeRecorderBlueprintLibrary::GetTakeRecorderPanel())
-	{
-		Out->SetStringField(TEXT("last_recorded_sequence"), VmhAssets::PathOf(Panel->GetLastRecordedLevelSequence()));
-		Out->SetStringField(TEXT("pending_sequence"), VmhAssets::PathOf(Panel->GetLevelSequence()));
-	}
-	return VmhJson::Ok(Out);
-#else
-	return VmhJson::Error(TEXT("TAKES_UNAVAILABLE"), TEXT("The Takes plugin was not present when VibeMetaHumans was built"));
-#endif
-}
