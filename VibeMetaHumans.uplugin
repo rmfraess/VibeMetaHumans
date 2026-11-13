@@ -4,7 +4,7 @@
 	"VersionName": "0.1",
 	"EngineVersion": "5.9.0",
 	"FriendlyName": "VibeMetaHumans",
-	"Description": "AI Editor Toolset for MetaHumans in Unreal Engine 5.8 — lets an MCP agent create and edit MetaHuman Characters, run MetaHuman Animator (video, iPhone, audio) and drive Live Link Face, through Unreal's native ToolsetRegistry, MCP server and AgentSkill systems.",
+	"Description": "AI Editor Toolset for MetaHumans in Unreal Engine 5.9 — lets an MCP agent create and edit MetaHuman Characters, run MetaHuman Animator (video, iPhone, audio) and drive Live Link Face, through Unreal's native ToolsetRegistry, MCP server and AgentSkill systems.",
 	"Category": "Editor",
 	"CreatedBy": "Kevin Buckley",
 	"CreatedByURL": "https://www.vibeue.com",
@@ -45,6 +45,9 @@
 		{ "Name": "LevelSequenceEditor", "Enabled": true },
 		{ "Name": "CaptureManagerEditor", "Enabled": true, "Optional": true },
 		{ "Name": "AppleARKitFaceSupport", "Enabled": true, "Optional": true },
-		{ "Name": "MetaHumanAnimationTools", "Enabled": true, "Optional": true }
+		{ "Name": "MetaHumanAnimationTools", "Enabled": true, "Optional": true },
+		{ "Name": "EditorToolset", "Enabled": true, "Optional": true },
+		{ "Name": "CaptureManagerToolset", "Enabled": true, "Optional": true },
+		{ "Name": "MetaHumanAnimatorToolset", "Enabled": true, "Optional": true }
 	]
 }

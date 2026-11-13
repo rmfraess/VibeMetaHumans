@@ -1,10 +1,11 @@
 ---
 name: metahuman
 display_name: MetaHumans with VibeMetaHumans
-description: Create, edit, rig, animate and place MetaHumans in Unreal Engine 5.8 through the VibeMetaHumans services (unreal.MetaHumanCharacterService, MetaHumanAnimatorService, MetaHumanIdentityService, MetaHumanLiveLinkService, MetaHumanSetupService, MetaHumanObjectService). Use for any MetaHuman task - new character, body/skin/eyes/hair changes, facial animation from webcam video, iPhone Live Link Face takes or audio, real-time Live Link, assembly into a Blueprint.
+description: Create, edit, rig, animate, dress and place MetaHumans in Unreal Engine 5.9 through the VibeMetaHumans services (unreal.MetaHumanCharacterService, MetaHumanWardrobeService, MetaHumanAnimatorService, MetaHumanIdentityService, MetaHumanLiveLinkService, MetaHumanSetupService, MetaHumanObjectService). Use for any MetaHuman task - new character, body/skin/eyes/hair changes, clothes on a built character, facial animation from webcam video, iPhone Live Link Face takes or audio, real-time Live Link, assembly into a Blueprint.
 vibeue_classes:
   - MetaHumanSetupService
   - MetaHumanCharacterService
+  - MetaHumanWardrobeService
   - MetaHumanAnimatorService
   - MetaHumanIdentityService
   - MetaHumanLiveLinkService
@@ -46,12 +47,13 @@ s = json.loads(unreal.MetaHumanSetupService.get_status())
 
 ## Routing table
 
-| Task | Read this pack | Service |
+| Task | Load this skill (`GetSkills`) | Service |
 |---|---|---|
-| Environment, what exists, enum names, open an asset editor | `metahuman-setup` | `MetaHumanSetupService` |
-| Make or change a character (body, skin, eyes, makeup, teeth, lashes, hair, clothes), rig it, build the Blueprint, place it | `metahuman-creator` | `MetaHumanCharacterService` |
-| Facial animation from a video file (webcam/DSLR), an iPhone take, or audio; export AnimSequence/LevelSequence | `metahuman-animator` | `MetaHumanAnimatorService` (+ `MetaHumanIdentityService` for iPhone depth takes) |
-| Real-time face capture in the editor, calibrate, bind to a placed MetaHuman, Take Recorder | `metahuman-live-link` | `MetaHumanLiveLinkService` |
+| Environment, what exists, enum names, open an asset editor | `/Skills/VibeMetaHumans/metahuman-setup` | `MetaHumanSetupService` |
+| Make or change a character (body, skin, eyes, makeup, teeth, lashes, hair, Creator outfits), rig it, build the Blueprint, place it | `/Skills/VibeMetaHumans/metahuman-creator` | `MetaHumanCharacterService` |
+| Dress a BUILT Blueprint in marketplace/Fab garments; poke-through, cuff spikes, necklines, keep it through a rebuild, groom LODs | `/Skills/VibeMetaHumans/metahuman-wardrobe` | `MetaHumanWardrobeService` (+ `attach_skeletal_mesh_to_blueprint`) |
+| Facial animation from a video file (webcam/DSLR), an iPhone take, or audio; export AnimSequence/LevelSequence | `/Skills/VibeMetaHumans/metahuman-animator` | `MetaHumanAnimatorService` (+ `MetaHumanIdentityService` for iPhone depth takes) |
+| Real-time face capture in the editor, calibrate, bind to a placed MetaHuman, Take Recorder | `/Skills/VibeMetaHumans/metahuman-live-link` | `MetaHumanLiveLinkService` |
 | Anything not wrapped: read/patch properties, call a Blueprint library, describe a struct | (this pack, below) | `MetaHumanObjectService` |
 
 ## Rules of thumb
@@ -65,9 +67,10 @@ s = json.loads(unreal.MetaHumanSetupService.get_status())
 3. **Pick the Animator route by input.** Plain video → `MonoFootage` (no identity). iPhone take in
    MetaHuman Animator mode → `DepthFootage` + a prepared Identity (best fidelity). Audio file →
    `Audio`. Never promise an identity from a webcam video: identities need depth.
-4. **Processing is blocking.** `process`, `request_auto_rig(..., True)`, `request_texture_sources`
+4. **Some calls are blocking.** `request_auto_rig(..., True)`, `request_texture_sources`
    and `build` return when done; a 30-second-timeout MCP client may abandon the call while the
-   editor keeps working. Re-query (`get_status`, `get_summary`) instead of re-running.
+   editor keeps working. Re-query (`get_status`, `get_summary`) instead of re-running. Animator
+   processing is Epic's asynchronous `ProcessPerformance` (poll `MetaHumanAnimatorService.get_status`).
 5. **Patch, don't rebuild.** Settings tools take a JSON patch; only the fields you pass change.
    When unsure of a shape: `MetaHumanObjectService.describe_struct("MetaHumanCharacterSkinSettings")`
    or `MetaHumanCharacterService.get_settings(c, "skin")`.
@@ -82,6 +85,7 @@ o = unreal.MetaHumanObjectService
 o.get_properties(perf, ["InputType", "HeadMovementMode"])
 o.set_properties(perf, '{"HeadMovementMode":"ControlRig","bSkipDiagnostics":true}')
 o.list_functions("MetaHumanCharacterEditorSubsystem", "Commit")
+# (Epic's CaptureManagerIngestTools.ScanForTakes is the AI-tool route to the same scan)
 o.call_function("CaptureManagerIngestBlueprintLibrary", "FindTakeDirectories", '{"SearchDirectory":"D:/Takes","bRecursive":true}')
 o.call_object_function(subject_settings_path, "SetSmoothing", '{"0": "/MetaHumanLiveLink/..."}')  # positional args by index
 o.describe_struct("MetaHumanCharacterEyesSettings")
