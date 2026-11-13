@@ -1,7 +1,7 @@
 ---
 name: metahuman-animator
 display_name: MetaHuman Animator (offline facial animation)
-description: Turn footage or audio into MetaHuman facial animation with unreal.MetaHumanAnimatorService and unreal.MetaHumanIdentityService - ingest a webcam/DSLR video, an iPhone Live Link Face take or a take archive into Footage Capture Data, build and auto-rig an Identity from a neutral frame (Mesh to MetaHuman), create MonoFootage / DepthFootage / Audio Performances, set audio mood, process, and export an AnimSequence or LevelSequence onto a MetaHuman. Use for "animate the face from this video/phone take/voice line".
+description: Turn footage or audio into MetaHuman facial animation with unreal.MetaHumanAnimatorService and unreal.MetaHumanIdentityService - ingest a webcam/DSLR video, an iPhone Live Link Face take or a take archive into Footage Capture Data (Epic CaptureManagerToolset), build and auto-rig an Identity from a neutral frame (Mesh to MetaHuman), create MonoFootage / DepthFootage / Audio Performances, process (Epic ProcessPerformance) and export an AnimSequence (Epic) or LevelSequence onto a MetaHuman. Use for "animate the face from this video/phone take/voice line".
 vibeue_classes:
   - MetaHumanAnimatorService
   - MetaHumanIdentityService
@@ -28,7 +28,18 @@ keywords:
 ```python
 import json, unreal
 anim, ident = unreal.MetaHumanAnimatorService, unreal.MetaHumanIdentityService
+# Epic AI tools (inside execute_python): await call_tool("<Toolset.Full.Name>.<Tool>", camelCaseParam=value)
+CM   = "CaptureManagerToolset.CaptureManagerIngestTools"
+PERF = "MetaHumanAnimatorToolset.MetaHumanAnimatorPerformanceTools"
+IDT  = "MetaHumanAnimatorToolset.MetaHumanAnimatorIdentityTools"
+INS  = "CaptureManagerToolset.CaptureManagerInspectionTools"
+EXP  = "MetaHumanAnimatorToolset.MetaHumanAnimatorExportTools"
 ```
+
+Ingest, processing, identity auto-rig / prepare and AnimSequence export are Epic's own tools now
+(`CaptureManagerToolset`, `MetaHumanAnimatorToolset`, `EditorToolset`; the plugin declares them as optional
+dependencies, and the project must enable them, e.g. via `AllToolsets` / `AllMetaHumanToolsets`).
+This service keeps Performance creation, configuration, status, cancel and Level Sequence export.
 
 ## Choose the route by input
 
@@ -58,7 +69,7 @@ truncation flag. ARKit-mode takes have no depth and use the MonoFootage route.
    Identity auto-rig requires Epic login; `unreal.MetaHumanIdentity.log_in_to_auto_rig_service` is
    an instance method on the loaded Identity. Body type index 1–6 picks the preview preset.
 3. Use `anim.create_performance` with the capture data and, for depth, the prepared Identity.
-   For audio, use the SoundWave asset; `anim.set_audio_mood` controls mood and output.
+   For audio, use the SoundWave asset; set mood and output controls with `EditorToolset.ObjectToolset.SetProperties` on the Performance (`AudioDrivenAnimationSolveOverrides`, `AudioDrivenAnimationOutputControls`, `HeadMovementMode`).
    `anim.configure_performance` can adjust the remaining settings.
 4. Process using `MetaHumanAnimatorToolset.MetaHumanAnimatorPerformanceTools.ProcessPerformance`.
    Inspect its schema and await the async result; use `anim.get_status` to inspect the performance.
@@ -89,4 +100,17 @@ print(vibeue.get_toolset_schema("MetaHumanAnimatorToolset.MetaHumanAnimatorIdent
   reports `can_process`.
 - Epic's own sample scripts use mood names like `HAPPY`; the 5.8 enum names are `Happiness`,
   `Sadness`, etc. The service accepts enum names case-insensitively.
+- **Face clips played as montages do not show on the plugin's face AnimBP.** `/MetaHumanCharacter/Face/ABP_Face`
+  is CopyPoseFromMesh only, with no Slot node, so a face AnimSequence played on a slot (`PlaySlotAnimationAsDynamicMontage`,
+  a sequencer slot track) is ignored. Use your own face AnimBP in the project: copy pose from the body, then a layered
+  blend with a `DefaultSlot`, and set it as the Face component's anim class on the built Blueprint (2026-11-12).
+- **Exported head movement snaps the head.** In `ABP_Face_PostProcess`, `HeadControlSwitch` is an on/off gate for
+  the head-movement IK (0.35 = off, no blend); when on, it snaps the head to the archetype pose (about 4.4 cm forward
+  and down on one character). Scaling HeadYaw/Pitch/Translation does not remove that offset: multiply
+  `HeadControlSwitch` by 0 in your face AnimBP, or export without head movement.
+- An AnimGraph node's `show_pin_for_properties` cannot be applied from Python (no ReconstructNode; set_editor_property
+  does not fire the PostEditChange). Use node property maps such as ModifyCurve's `curve_map`.
+- **Never duplicate an engine-plugin AnimBP into /Game as a test fixture** (e.g. `ABP_MH_LiveLink`, `ABP_Face`).
+  Deleting the copy runs ForceDeleteObjects, which cannot unload a package that references MetaHuman Control Rig
+  classes, and the editor then fatals on a `RigVMHost` cast. Build fixtures from a minimal AnimBP you create.
 - Engine-level reference: UnrealEngineSkills `ue-metahuman-animator`.

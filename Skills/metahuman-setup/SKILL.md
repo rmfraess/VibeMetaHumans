@@ -1,7 +1,7 @@
 ---
 name: metahuman-setup
 display_name: MetaHuman Setup and Discovery
-description: Check the MetaHuman environment (plugins, optional content, cloud login), list MetaHuman assets (characters, presets, identities, performances, capture data, wardrobe items, built Blueprints), look up enum option names and open MetaHuman asset editors with unreal.MetaHumanSetupService. Use at the start of any MetaHuman task and whenever a tool says an asset or option was not found.
+description: Check the MetaHuman environment (plugins, optional content, cloud login), look up enum option names with unreal.MetaHumanSetupService, and list MetaHuman assets (characters, presets, identities, performances, capture data, wardrobe items, built Blueprints) or open their editors through Epic AssetToolset.FindAssets / EditorAppToolset.OpenEditorForAsset. Use at the start of any MetaHuman task and whenever a tool says an asset or option was not found.
 vibeue_classes:
   - MetaHumanSetupService
 keywords:

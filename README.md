@@ -1,3 +1,8 @@
+> [!WARNING]
+> **Unreal Engine 5.9 build: not fully tested yet.** This `5-9` branch builds and loads in UE 5.9, but
+> it has not been tested end to end. Expect rough edges and report problems as issues. For production
+> work, use the stable `main` branch.
+
 # VibeMetaHumans — AI Editor Toolset for MetaHumans (Unreal Engine 5.9)
 
 VibeMetaHumans is a sibling of [VibeUE](https://github.com/kevinpbuckley/VibeUE) that focuses on one
@@ -14,6 +19,7 @@ It covers the four workflows of the in-editor MetaHuman pipeline:
 | Create & edit a character (MetaHuman Creator) | `MetaHumanCharacterService` + native Creator tools | character creation, body and face editing, settings, rigging, wardrobe, asynchronous build and deferred save; see `metahuman-creator` |
 | **Custom mesh to MetaHuman** | `MetaHumanCharacterService` + Creator subsystem | custom mesh conform, posed DNA export, A-pose commit, DCC round trips and Blueprint accessories |
 | **Hair on a built MetaHuman** | `MetaHumanCharacterService` | add or import grooms; discover wardrobe assets with the native Asset toolset |
+| **Dress a built MetaHuman** | `MetaHumanWardrobeService` | marketplace/Fab skeletal garments on a built Blueprint without a rebuild: `fix_unevaluated_bone_weights`, `make_full_body_from_dna`, `hide_body_under_garments`, `push_garment_out_of_mesh`, `snapshot_blueprint_components` / `restore_blueprint_components` (also `build(..., True)`), `fill_groom_lods`; see `metahuman-wardrobe` |
 | Facial animation from **webcam / DSLR video** | `MetaHumanAnimatorService` | ingest a video file → Footage Capture Data → MonoFootage Performance → process → AnimSequence / LevelSequence |
 | Facial animation from an **iPhone** (Live Link Face) | `MetaHumanIdentityService` + `MetaHumanAnimatorService` | ingest the take, build and auto-rig an Identity from a neutral frame, process a DepthFootage Performance |
 | Facial animation from **audio only** | `MetaHumanAnimatorService` | SoundWave → Audio Performance with mood controls → process → export |
@@ -25,7 +31,7 @@ Every Vibe service tool returns a JSON string: `{"success": true, ...}` or
 `{"success": false, "error_code": "...", "error": "..."}`.
 
 > **Optional content.** MetaHuman Creator needs the **"MetaHuman Creator Core Data"** install
-> option from the Epic Games Launcher (Library → Unreal Engine 5.8 → Options). Without it there are
+> option from the Epic Games Launcher (Library → Unreal Engine 5.9 → Options). Without it there are
 > no presets, no texture synthesis and no wardrobe library; `get_status()` reports
 > `optional_content_installed`. Cloud steps (auto-rig, high-resolution textures) need an Epic account
 > signed in to the MetaHuman service.
@@ -46,12 +52,13 @@ Every Vibe service tool returns a JSON string: `{"success": true, ...}` or
    project's `.uproject`, and build the editor target (in Proteus: `BuildAndLaunchGame.ps1`, which is
    also copied here). The plugin is `EnabledByDefault: false` so an unbuilt checkout never
    triggers the "missing modules" dialog.
-4. Verify in the editor console: `VibeMetaHumans.ListToolsets` (expect 6 toolsets) and from the
+4. Verify in the editor console: `VibeMetaHumans.ListToolsets` (expect 7 toolsets) and from the
    agent: `unreal.MetaHumanSetupService.get_status()`.
 
-Skill packs under `Content/Skills` register as native **AgentSkills** at startup
-(`ToolsetRegistry.AgentSkillToolset` → `ListSkills` / `GetSkills`), the same way VibeUE's do.
-`VibeMetaHumans.ReloadSkills` re-reads them without a restart.
+Skill packs under `Skills/` are discovered natively by UE 5.9 (`<Plugin>/Skills/**/SKILL.md`) and
+served through `ToolsetRegistry.AgentSkillToolset` → `ListSkills` / `GetSkills` as
+`/Skills/VibeMetaHumans/<pack>`, the same way VibeUE's are. The engine re-reads the files on every
+call, so edits need no reload or restart.
 
 ---
 
@@ -78,7 +85,7 @@ result before using the capture data or exporting. Native edits need an edit ses
 settings structs, not the old JSON-patch wrapper. Use deferred save and check its final status.
 
 Through the MCP endpoint the same tools appear as `VibeMetaHumans.MetaHumanCharacterService.CreateCharacter`
-etc. (`list_toolsets` / `describe_toolset` / `call_tool`).
+etc. (`list_toolsets` / `describe_tools` / `call_tool`).
 
 ---
 
@@ -92,10 +99,11 @@ VibeMetaHumans/
 │   ├── Private/Services/U*Service.cpp
 │   ├── Public|Private/Utils/VmhJson.*   # JSON results, struct<->JSON, property patching, reflection calls
 │   ├── Public|Private/Utils/VmhAssets.* # load/create/save assets, find actors
+│   ├── Public|Private/Utils/VmhSkin.*   # CPU skinning from mesh descriptions, AnimSequence poses, AABB/winding queries
+│   ├── Public|Private/Utils/VmhBlueprintSnapshot.* # record / restore a Blueprint's components around a rebuild
 │   └── VibeMetaHumansModule.*           # reflection-based toolset registration, console commands
-├── Content/Python/init_unreal.py        # registers Content/Skills as AgentSkills
 ├── Content/Python/vibemetahumans.py     # agent helpers (status, toolset discovery)
-└── Content/Skills/<pack>/SKILL.md       # metahuman (router), -setup, -creator, -animator, -live-link
+└── Skills/<pack>/SKILL.md               # metahuman (router), -setup, -creator, -wardrobe, -animator, -live-link (native 5.9 discovery)
 ```
 
 Design notes:
@@ -107,8 +115,9 @@ Design notes:
 - Native Creator settings edits read a settings struct, modify the copy, then commit it through the
   character editor subsystem. Use `MetaHumanObjectService.describe_struct("MetaHumanCharacterEyesSettings")` to inspect a shape.
 - Long operations can outlive a request. Check their status or async result before continuing or retrying.
-- Nothing here needs the VibeUE plugin, but they pair well: VibeUE's `execute_python_code` is the
-  easiest way to drive these services, and its `capture_image` shows the result.
+- Nothing here needs the VibeUE plugin. The engine's own `execute_python` MCP tool is the easiest
+  way to drive these services, and `SceneCaptureToolset.CaptureActiveEditorView` (or
+  `CaptureGameViewport` in PIE) shows the result.
 
 ## Status
 

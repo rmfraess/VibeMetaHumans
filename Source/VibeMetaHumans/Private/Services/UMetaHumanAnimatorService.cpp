@@ -17,7 +17,6 @@
 namespace
 {
 	const TCHAR* PerformanceFactoryPath = TEXT("/Script/MetaHumanPerformance.MetaHumanPerformanceFactoryNew");
-	const TCHAR* IngestLibraryName = TEXT("CaptureManagerIngestBlueprintLibrary");
 
 	UMetaHumanPerformance* LoadPerformance(const FString& Path, FString& OutError)
 	{
@@ -65,44 +64,6 @@ namespace
 			}
 		}
 		return Out;
-	}
-
-	/** Call one of the Capture Manager ingest functions by reflection (its header is private). */
-	FString RunIngest(const TCHAR* FunctionName, const TSharedPtr<FJsonObject>& Args, const TCHAR* IngestLabel)
-	{
-		UClass* Library = VmhJson::FindClass(IngestLibraryName);
-		if (!Library)
-		{
-			return VmhJson::Error(TEXT("NO_CAPTURE_MANAGER"), TEXT("CaptureManagerIngestBlueprintLibrary not found; enable the CaptureManagerEditor plugin"));
-		}
-		if (!Args->HasField(TEXT("Params")))
-		{
-			Args->SetObjectField(TEXT("Params"), VmhJson::Obj());
-		}
-		TSharedPtr<FJsonObject> Result;
-		FString Error;
-		if (!VmhJson::CallStaticFunction(Library, FunctionName, Args, Result, Error))
-		{
-			return VmhJson::Error(TEXT("INGEST_CALL_FAILED"), Error);
-		}
-		FString CaptureDataPath;
-		Result->TryGetStringField(TEXT("ReturnValue"), CaptureDataPath);
-		FString ErrorMessage;
-		Result->TryGetStringField(TEXT("OutErrorMessage"), ErrorMessage);
-		if (CaptureDataPath.IsEmpty() || CaptureDataPath == TEXT("None"))
-		{
-			return VmhJson::Error(TEXT("INGEST_FAILED"), FString::Printf(TEXT("%s failed: %s"), IngestLabel, ErrorMessage.IsEmpty() ? TEXT("no capture data returned") : *ErrorMessage));
-		}
-		TSharedPtr<FJsonObject> Out = VmhJson::Obj();
-		Out->SetStringField(TEXT("capture_data"), CaptureDataPath);
-		if (UFootageCaptureData* Footage = VmhAssets::Load<UFootageCaptureData>(CaptureDataPath))
-		{
-			Out->SetNumberField(TEXT("image_sequences"), Footage->ImageSequences.Num());
-			Out->SetNumberField(TEXT("depth_sequences"), Footage->DepthSequences.Num());
-			Out->SetNumberField(TEXT("audio_tracks"), Footage->AudioTracks.Num());
-			Out->SetBoolField(TEXT("has_depth"), Footage->DepthSequences.Num() > 0);
-		}
-		return VmhJson::Ok(Out);
 	}
 }
 
@@ -207,37 +168,6 @@ FString UMetaHumanAnimatorService::ConfigurePerformance(const FString& Performan
 	TSharedPtr<FJsonObject> Out = StatusJson(Performance);
 	Out->SetArrayField(TEXT("changed"), VmhJson::StringArray(Changed));
 	return VmhJson::Ok(Out);
-}
-
-FString UMetaHumanAnimatorService::SetAudioMood(const FString& PerformancePath, const FString& Mood, float Intensity, const FString& OutputControls, const FString& HeadMovementMode)
-{
-	TSharedPtr<FJsonObject> Patch = VmhJson::Obj();
-	if (!Mood.IsEmpty() || Intensity >= 0.f)
-	{
-		TSharedPtr<FJsonObject> Overrides = VmhJson::Obj();
-		if (!Mood.IsEmpty())
-		{
-			Overrides->SetStringField(TEXT("Mood"), Mood);
-		}
-		if (Intensity >= 0.f)
-		{
-			Overrides->SetNumberField(TEXT("MoodIntensity"), FMath::Clamp(Intensity, 0.f, 1.f));
-		}
-		Patch->SetObjectField(TEXT("AudioDrivenAnimationSolveOverrides"), Overrides);
-	}
-	if (!OutputControls.IsEmpty())
-	{
-		Patch->SetStringField(TEXT("AudioDrivenAnimationOutputControls"), OutputControls);
-	}
-	if (!HeadMovementMode.IsEmpty())
-	{
-		Patch->SetStringField(TEXT("HeadMovementMode"), HeadMovementMode);
-	}
-	if (Patch->Values.Num() == 0)
-	{
-		return VmhJson::Error(TEXT("NO_VALUES"), TEXT("Pass a mood, intensity, output controls or head movement mode"));
-	}
-	return ConfigurePerformance(PerformancePath, VmhJson::Stringify(Patch));
 }
 
 FString UMetaHumanAnimatorService::GetStatus(const FString& PerformancePath)

@@ -105,33 +105,6 @@ FString UMetaHumanIdentityService::GetStatus(const FString& IdentityPath)
 	return VmhJson::Ok(StatusJson(Identity));
 }
 
-FString UMetaHumanIdentityService::RequestAutoRig(const FString& IdentityPath)
-{
-	FString Error;
-	UMetaHumanIdentity* Identity = LoadIdentity(IdentityPath, Error);
-	if (!Identity)
-	{
-		return VmhJson::Error(TEXT("IDENTITY_NOT_FOUND"), Error);
-	}
-	UMetaHumanIdentityFace* Face = GetFace(Identity, false);
-	if (!Face || !Face->IsConformalRigValid())
-	{
-		return VmhJson::Error(TEXT("NOT_CONFORMED"), TEXT("The identity's face is not conformed yet (create_identity_from_footage does that)"));
-	}
-	if (!Identity->IsLoggedInToService())
-	{
-		Identity->LogInToAutoRigService();
-		if (!Identity->IsLoggedInToService())
-		{
-			return VmhJson::Error(TEXT("NOT_LOGGED_IN"), TEXT("Not logged in to the MetaHuman service; complete the Epic login then retry"));
-		}
-	}
-	Identity->CreateDNAForIdentity(/*bLogOnly*/ true);
-	TSharedPtr<FJsonObject> Out = StatusJson(Identity);
-	Out->SetStringField(TEXT("auto_rig"), TEXT("requested (asynchronous) - poll get_status"));
-	return VmhJson::Ok(Out);
-}
-
 FString UMetaHumanIdentityService::ExportDna(const FString& IdentityPath, const FString& DnaOutPath, const FString& BrowsOutPath)
 {
 	FString Error;

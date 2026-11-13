@@ -36,9 +36,6 @@ public:
 	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Identity")
 	static FString GetStatus(const FString& IdentityPath);
 
-	/** Send the conformed face to the MetaHuman service for auto-rigging (asynchronous). Poll get_status. */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Identity")
-	static FString RequestAutoRig(const FString& IdentityPath);
 
 	/** Export the identity's DNA (and brows json) to files on disk. */
 	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Identity")

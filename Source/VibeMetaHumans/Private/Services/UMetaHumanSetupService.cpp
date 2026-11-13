@@ -19,37 +19,6 @@
 #include "Utils/VibeMetaHumansPaths.h"
 #include "VibeMetaHumansModule.h"
 
-namespace
-{
-	const TCHAR* OptionalContentRoot = TEXT("/MetaHumanCharacter/Optional");
-
-	struct FKindInfo
-	{
-		const TCHAR* ClassPath;
-		const TCHAR* DefaultRoot;
-	};
-
-	bool ResolveKind(const FString& Kind, FKindInfo& Out)
-	{
-		const FString K = Kind.TrimStartAndEnd().ToLower();
-		if (K == TEXT("character"))          { Out = { TEXT("/Script/MetaHumanCharacter.MetaHumanCharacter"), TEXT("/Game") }; return true; }
-		if (K == TEXT("preset"))             { Out = { TEXT("/Script/MetaHumanCharacter.MetaHumanCharacter"), TEXT("/MetaHumanCharacter/Optional/Presets") }; return true; }
-		if (K == TEXT("identity"))           { Out = { TEXT("/Script/MetaHumanIdentity.MetaHumanIdentity"), TEXT("/Game") }; return true; }
-		if (K == TEXT("performance"))        { Out = { TEXT("/Script/MetaHumanPerformance.MetaHumanPerformance"), TEXT("/Game") }; return true; }
-		if (K == TEXT("capture_data") || K == TEXT("capturedata") || K == TEXT("footage"))
-		                                      { Out = { TEXT("/Script/CaptureDataCore.CaptureData"), TEXT("/Game") }; return true; }
-		if (K == TEXT("wardrobe"))           { Out = { TEXT("/Script/MetaHumanCharacterPalette.MetaHumanWardrobeItem"), TEXT("/MetaHumanCharacter/Optional") }; return true; }
-		if (K == TEXT("collection"))         { Out = { TEXT("/Script/MetaHumanCharacterPalette.MetaHumanCollection"), TEXT("/Game") }; return true; }
-		if (K == TEXT("blueprint"))          { Out = { TEXT("/Script/Engine.Blueprint"), TEXT("/Game/MetaHumans") }; return true; }
-		if (K == TEXT("soundwave") || K == TEXT("audio"))
-		                                      { Out = { TEXT("/Script/Engine.SoundWave"), TEXT("/Game") }; return true; }
-		if (K == TEXT("animation") || K == TEXT("anim_sequence"))
-		                                      { Out = { TEXT("/Script/Engine.AnimSequence"), TEXT("/Game") }; return true; }
-		if (K == TEXT("level_sequence"))     { Out = { TEXT("/Script/LevelSequence.LevelSequence"), TEXT("/Game") }; return true; }
-		return false;
-	}
-}
-
 FString UMetaHumanSetupService::GetStatus()
 {
 	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
@@ -83,7 +52,7 @@ FString UMetaHumanSetupService::GetStatus()
 	if (!bOptional)
 	{
 		Out->SetStringField(TEXT("optional_content_hint"),
-			TEXT("Install 'MetaHuman Creator Core Data' from the Epic Games Launcher (Library > Unreal Engine 5.8 > Options). "
+			TEXT("Install 'MetaHuman Creator Core Data' from the Epic Games Launcher (Library > Unreal Engine 5.9 > Options). "
 			     "Without it there are no presets, no texture synthesis and no wardrobe library; create_character still works from the blank template."));
 	}
 	if (const TSharedPtr<IPlugin> MHC = IPluginManager::Get().FindPlugin(TEXT("MetaHumanCharacter")))
