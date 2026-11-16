@@ -9,7 +9,8 @@ capture_face_for_fit replaces the jam's per-character ue_capture.py (copied into
 is rendered in a private preview world, so no level actor, no "/Temp unsaved" LoadLevel trouble and no empty capture
 from rendering in the same call as spawn_in_level. Gotchas found in the jam, kept here:
 - A base-colour capture (bBaseColor=True) is written with alpha 0; the service forces alpha to 255.
-- The character must wear no grooms while its landmarks move (move_face_landmarks refuses): remove hair/brows first.
+- The character must wear no grooms while it is captured or its landmarks move (capture_face_for_fit and
+  move_face_landmarks refuse): remove hair/brows first.
 - Preset skin and face indices are readable without an edit session (get_settings); only the landmark moves need one.
 - Measure the LIT render; MediaPipe missed faces on flat base colour more often.
 """

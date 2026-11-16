@@ -72,7 +72,7 @@ grooms under `/Game/MetaHumans/<Name>`.
    Creator's own sculpt landmarks (`{"landmarks":{"0":[x,y,z],...}, "likely_ears":[...], "likely_neck":[...],
    "likely_skull":[...]}`, centimetres, edit frame) - match them to a MediaPipe measurement of a front capture
    with the face-fit kit the plugin ships (`Content/Python/vmh_facefit`, used on five characters in a jam):
-   `capture_face_for_fit(c, out_dir, "iter0")` renders the Creator's editing actor front-on in a private preview
+   `capture_face_for_fit(c, out_dir, "iter0")` (refuses while grooms are worn) renders the Creator's editing actor front-on in a private preview
    world (no level, no PIE) and writes `mh_iter0.png` plus `mh_iter0.json` (every landmark projected to pixels, the
    ear/neck/skull ones listed in `skip`; `tracked_contours_px` is MetaHuman's own contour tracker on the render);
    outside the editor `measure.py crop|measure` (MediaPipe: needs opencv-python, numpy, mediapipe) measures the
