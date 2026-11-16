@@ -75,6 +75,10 @@ grooms under `/Game/MetaHumans/<Name>`.
    policy or safety refusals. Clear grooms and remove the face rig before sculpting; previewing a
    groomed character has hung the editor. Ear edits can crumple ears; identify indices per character
    and avoid them unless explicitly intended. Landmark sets differ between presets.
+   Front capture for a picture fit: `MetaHumanCharacterService.capture_face_for_fit(c, out_dir, "iter0")` renders the
+   Creator's editing actor in a private preview world and writes `mh_iter0.png` + `.json` (landmarks in pixels,
+   ear/neck/skull in `skip`); the kit in `Content/Python/vmh_facefit` measures it against a photo (`measure.py`,
+   `fit.py`). Apply its deltas with the native landmark calls above; the kit's `apply_deltas` is not on this fork.
 4. Look: skin tone is lightness and redness; use the native session tool above or read
    `character.skin_settings`, modify the copy and call `sub.commit_skin_settings(character, settings)`.
    Do likewise with eyes, makeup and head settings and their matching subsystem commit functions.

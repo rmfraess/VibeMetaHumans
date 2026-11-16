@@ -19,7 +19,7 @@ It covers the four workflows of the in-editor MetaHuman pipeline:
 | Create & edit a character (MetaHuman Creator) | `MetaHumanCharacterService` + native Creator tools | character creation, body and face editing, settings, rigging, wardrobe, asynchronous build and deferred save; see `metahuman-creator` |
 | **Custom mesh to MetaHuman** | `MetaHumanCharacterService` + Creator subsystem | custom mesh conform, posed DNA export, A-pose commit, DCC round trips and Blueprint accessories |
 | **Hair on a built MetaHuman** | `MetaHumanCharacterService` | add or import grooms; discover wardrobe assets with the native Asset toolset |
-| **Dress a built MetaHuman** | `MetaHumanWardrobeService` | marketplace/Fab skeletal garments on a built Blueprint without a rebuild: `fix_unevaluated_bone_weights`, `make_full_body_from_dna`, `hide_body_under_garments`, `push_garment_out_of_mesh`, `snapshot_blueprint_components` / `restore_blueprint_components` (also `build(..., True)`), `fill_groom_lods`; see `metahuman-wardrobe` |
+| **Dress a built MetaHuman** (2026-11-12, extended 2026-11-14) | `MetaHumanWardrobeService` | marketplace/Fab skeletal garments on a built Blueprint without a rebuild: `make_garment_variant` (pack garment copied with its own material and capped textures), `transfer_skin_weights` (weights onto a root-only Chaos render mesh), `describe_skeletal_mesh` (LODs, bones per LOD, sections, follower check), `fix_unevaluated_bone_weights` (cuff spikes and LOD streaks: every garment LOD against every body LOD it is drawn at), `make_full_body_from_dna` (the built body's missing skin back), `push_body_under_garments` (skin under a dress moved inward, nothing deleted), `hide_body_under_garments` (skin under closed garments deleted), `trim_inner_garment` (a shirt under a jacket), `push_garment_out_of_mesh` (a neckline out over the face mesh's neck skirt), `dump_runtime_poses` / `dump_actor_pose` (poses with the post-process correctives, as the game plays them), `measure_poke_through`, `capture_fit_views` (PNG views of the posed character from a private preview world: no level, no PIE), `add_skinned_accessory`, `snapshot_blueprint_components` / `restore_blueprint_components` (survive a rebuild, explicit clears kept; also `build(..., True)`), `post_build_fixup` (groom LODs, brow opacity, texture caps, Face anim class), `audit_placed_instances` (per-instance overrides on placed actors), `fill_groom_lods` |
 | Facial animation from **webcam / DSLR video** | `MetaHumanAnimatorService` | ingest a video file → Footage Capture Data → MonoFootage Performance → process → AnimSequence / LevelSequence |
 | Facial animation from an **iPhone** (Live Link Face) | `MetaHumanIdentityService` + `MetaHumanAnimatorService` | ingest the take, build and auto-rig an Identity from a neutral frame, process a DepthFootage Performance |
 | Facial animation from **audio only** | `MetaHumanAnimatorService` | SoundWave → Audio Performance with mood controls → process → export |
@@ -101,9 +101,13 @@ VibeMetaHumans/
 │   ├── Public|Private/Utils/VmhAssets.* # load/create/save assets, find actors
 │   ├── Public|Private/Utils/VmhSkin.*   # CPU skinning from mesh descriptions, AnimSequence poses, AABB/winding queries
 │   ├── Public|Private/Utils/VmhBlueprintSnapshot.* # record / restore a Blueprint's components around a rebuild
+│   ├── Public|Private/Utils/VmhPreview.*  # a Blueprint posed in a private preview world (runtime poses, captures)
 │   └── VibeMetaHumansModule.*           # reflection-based toolset registration, console commands
 ├── Content/Python/vibemetahumans.py     # agent helpers (status, toolset discovery)
-└── Skills/<pack>/SKILL.md               # metahuman (router), -setup, -creator, -wardrobe, -animator, -live-link (native 5.9 discovery)
+├── Content/Python/vmh_wardrobe.py       # GeometryScript-backed wardrobe helpers behind three WardrobeService tools
+├── Content/Python/vmh_facefit/          # face-fit kit: measure.py, fit.py (MediaPipe, outside the editor), ue_capture.py
+├── Tests/postjam_smoke.py               # headless checks of the 2026-11-14 tools against a project with built MetaHumans
+└── Skills/<pack>/SKILL.md               # metahuman (router), -setup, -creator, -wardrobe, -animator, -live-link, -shipping (native 5.9 discovery)
 ```
 
 Design notes:

@@ -67,6 +67,18 @@ public:
 	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
 	static FString GetSaveStatus(const FString& CharacterPath);
 
+	/**
+	 * The face-fit kit's front capture (Content/Python/vmh_facefit): the character's Creator editing actor spawned in a
+	 * private preview world (no level, no PIE), rendered orthographically front-on (camera on +Y, WidthCm across,
+	 * Size px square, centred on the face landmarks), written to OutDir/mh_<Tag>.png with mh_<Tag>.json - the meta file
+	 * fit.py reads: cm_per_px, centre_z, skip (ear/neck/skull landmarks), landmarks_cm and landmarks_px (every sculpt
+	 * landmark projected to pixels). bBaseColor captures unlit base colour (alpha is forced to 255: base-colour captures
+	 * come back with alpha 0). bTrack also runs MetaHuman's face contour tracker on the render (tracked_contours_px).
+	 * OutDir default Saved/VibeMetaHumans/FaceFit/<Character>.
+	 */
+	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	static FString CaptureFaceForFit(const FString& CharacterPath, const FString& OutDir = TEXT(""), const FString& Tag = TEXT("front"), int32 Size = 768, float WidthCm = 30.f, bool bBaseColor = false, bool bTrack = true);
+
 	/** Switch to a fixed legacy body type (f_med_nrw, m_tal_ovw, ...) or back to BlendableBody. See MetaHumanSetupService.get_enum_options. */
 	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
 	static FString SetBodyType(const FString& CharacterPath, const FString& BodyType);
@@ -116,7 +128,11 @@ public:
 	 * are dropped and edited properties (Body mesh, Face anim class, override materials, tags) reset. With
 	 * bPreserveBlueprintCustomization every Blueprint already in the output folder is snapshotted first and restored
 	 * after (MetaHumanWardrobeService.restore_blueprint_components): missing components re-created, recorded values
-	 * re-applied; the report is in "preserved". Asset-level edits (groom LODs, material tweaks on built assets, an
+	 * re-applied; the report is in "preserved". The restore puts the Blueprint back as it WAS: a component's mesh,
+	 * groom, anim class, override materials and visibility are restored even when empty (so a cleared default outfit
+	 * stays cleared), which also means a hair or outfit newly chosen in the Creator for a slot that was empty before
+	 * is cleared again - read "applied" (before/after per property) and set those back, or build without preserving
+	 * and use restore_blueprint_components with skip patterns. Asset-level edits (groom LODs, material tweaks on built assets, an
 	 * edited built body) are NOT covered: they are overwritten by the build.
 	 */
 	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
