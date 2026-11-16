@@ -80,7 +80,8 @@ grooms under `/Game/MetaHumans/<Name>`.
    ear/neck/skull in `skip`); the kit in `Content/Python/vmh_facefit` measures it against a photo (`measure.py`,
    `fit.py`); `ue_capture.apply_deltas` applies the result with `move_face_landmarks(c, deltas_json)`, which moves
    the targets and holds every other landmark until the residuals converge (the native calls do neither).
-   Remove the character's grooms first; ear landmarks are refused unless `bAllowEars`.
+   Remove the character's grooms first (the capture and the moves both refuse while any are worn); ear landmarks
+   are refused unless `bAllowEars`.
 4. Look: skin tone is lightness and redness; use the native session tool above or read
    `character.skin_settings`, modify the copy and call `sub.commit_skin_settings(character, settings)`.
    Do likewise with eyes, makeup and head settings and their matching subsystem commit functions.

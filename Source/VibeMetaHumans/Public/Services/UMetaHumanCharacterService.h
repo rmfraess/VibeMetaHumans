@@ -85,7 +85,7 @@ public:
 	 * fit.py reads: cm_per_px, centre_z, skip (ear/neck/skull landmarks), landmarks_cm and landmarks_px (every sculpt
 	 * landmark projected to pixels). bBaseColor captures unlit base colour (alpha is forced to 255: base-colour captures
 	 * come back with alpha 0). bTrack also runs MetaHuman's face contour tracker on the render (tracked_contours_px).
-	 * OutDir default Saved/VibeMetaHumans/FaceFit/<Character>.
+	 * OutDir default Saved/VibeMetaHumans/FaceFit/<Character>. Refuses while the character wears grooms (GROOMS_WORN).
 	 */
 	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
 	static FString CaptureFaceForFit(const FString& CharacterPath, const FString& OutDir = TEXT(""), const FString& Tag = TEXT("front"), int32 Size = 768, float WidthCm = 30.f, bool bBaseColor = false, bool bTrack = true);

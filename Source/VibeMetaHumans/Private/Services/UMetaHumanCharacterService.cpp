@@ -2708,6 +2708,11 @@ FString UMetaHumanCharacterService::CaptureFaceForFit(const FString& CharacterPa
 	{
 		return Ctx.ToError();
 	}
+	const TArray<FString> Worn = WornGroomSlots(Ctx.Character);
+	if (Worn.Num() > 0)
+	{
+		return VmhJson::Error(TEXT("GROOMS_WORN"), FString::Printf(TEXT("%s wears grooms (%s); spawning the Creator preview with grooms on hung the shared editor for minutes. Clear the groom slots, then capture (move_face_landmarks needs them clear too)"), *CharacterPath, *FString::Join(Worn, TEXT(", "))));
+	}
 	TArray<FVector> Landmarks;
 	Ctx.Subsystem->GetFaceLandmarks(Ctx.Character, Landmarks);
 	if (Landmarks.Num() == 0)
