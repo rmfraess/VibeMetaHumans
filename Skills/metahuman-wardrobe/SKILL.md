@@ -185,8 +185,8 @@ print(json.loads(wd.audit_placed_instances(BP, False, "/Game/Maps/L_Main")))   #
   Read its `applied` list: a stale recorded value (old brows, old override materials) comes back too, and a slot that
   was empty before the build is emptied again (hair or an outfit newly chosen in the Creator): set those back, or
   restore by hand with skip patterns (`'["Hair.GroomAsset"]'`).
-- `post_build_fixup` redoes what a rebuild throws away at asset level: groom LOD fill on every groom (brows made
-  visible), the brow groom's `OpacityNear/Far` (pale brows were fixed with 2.0), per-asset texture caps
+- `post_build_fixup` redoes what a rebuild throws away at asset level: groom LOD fill on every groom in the build folder (brows made
+  visible; a groom elsewhere may be shared and is skipped: `fill_groom_lods` it yourself), the brow groom's `OpacityNear/Far` (pale brows were fixed with 2.0), per-asset texture caps
   when you pass them (`"texture_caps": {"T_Body_*_VT": 1024, "T_Head_*_VT": 2048}` for a web or low-end target; a cap
   only lowers; never flips virtual texture streaming), the Face anim class.
   It does **not** redo body fits: run `push/hide_body_under_garments` again on the new body.
@@ -215,7 +215,7 @@ every accessory in the real close-up frame before building it (earrings hidden b
 Optimized builds leave groom LODs with nothing to draw: cards only at LOD3, helmets only at LOD5/7, so hair went bald
 at LOD4 and LOD6 and brows vanished from LOD4 on (screen size 0.0625: wide shots).
 `wd.fill_groom_lods(groom, True, False)` copies the nearest LOD's cards or helmet into every empty LOD (`True` also turns
-hidden LODs into visible cards: the brows); `post_build_fixup` runs it on every groom of the Blueprint. The bindings
+hidden LODs into visible cards: the brows); `post_build_fixup` runs it on the Blueprint's grooms inside the build folder. The bindings
 rebuild by themselves in about a minute. Judge hair in PIE: a scene capture may not draw grooms.
 
 ## Gotchas

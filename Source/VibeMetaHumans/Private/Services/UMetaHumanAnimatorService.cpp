@@ -361,6 +361,10 @@ FString UMetaHumanAnimatorService::AddBlinks(const FString& AnimOrFolderPath, fl
 	{
 		Curves = { TEXT("CTRL_expressions_eyeBlinkL"), TEXT("CTRL_expressions_eyeBlinkR") };
 	}
+	if (Curves.Num() == 0 || Curves.Contains(NAME_None))
+	{
+		return VmhJson::Error(TEXT("BAD_CURVES"), TEXT("options.curves must be a non-empty list of curve names"));
+	}
 	double Peak = 0.6, Clear = 1.2, FirstMin = 0.6, FirstMax = 1.4;
 	Options->TryGetNumberField(TEXT("existing_peak"), Peak);   // a baked value at or over this is a blink already
 	Options->TryGetNumberField(TEXT("clear"), Clear);          // no new blink this close (s) to another
@@ -426,28 +430,23 @@ FString UMetaHumanAnimatorService::AddBlinks(const FString& AnimOrFolderPath, fl
 			{
 				Controller.AddCurve(Id);
 			}
-			TArray<TPair<double, float>> Points;
+			TArray<FRichCurveKey> Keys;
 			for (const FRichCurveKey& K : Old)
 			{
 				const bool bInside = Blinks.ContainsByPredicate([&K, &Shape](double B) { return K.Time >= B + Shape[0].Key && K.Time <= B + Shape.Last().Key; });
-				if (!bInside) { Points.Emplace(K.Time, K.Value); }
+				if (!bInside) { Keys.Add(K); }   // untouched keys keep their interpolation and tangents
 			}
 			for (const double B : Blinks)
 			{
 				for (const TPair<double, double>& S : Shape)
 				{
 					const double T = FMath::Max(0.0, B + S.Key);
-					Points.Emplace(T, S.Value < 0.0 ? CurveAt(Old, T) : static_cast<float>(S.Value));
+					FRichCurveKey K(static_cast<float>(T), S.Value < 0.0 ? CurveAt(Old, T) : static_cast<float>(S.Value));
+					K.InterpMode = RCIM_Linear;
+					Keys.Add(K);
 				}
 			}
-			Points.Sort([](const TPair<double, float>& A, const TPair<double, float>& B) { return A.Key < B.Key; });
-			TArray<FRichCurveKey> Keys;
-			for (const TPair<double, float>& P : Points)
-			{
-				FRichCurveKey K(static_cast<float>(P.Key), P.Value);
-				K.InterpMode = RCIM_Linear;
-				Keys.Add(K);
-			}
+			Keys.Sort([](const FRichCurveKey& A, const FRichCurveKey& B) { return A.Time < B.Time; });
 			Controller.SetCurveKeys(Id, Keys);
 		}
 		Controller.CloseBracket();

@@ -207,6 +207,8 @@ def add_skinned_accessory(blueprint, static_mesh, component, mode="surface", sur
         raise RuntimeError("out_path must be under /Game and not /Game/Fab")
     sk = _new_skeletal(dm, body_sk.skeleton, path, slots, mats)
     fix = json.loads(unreal.MetaHumanWardrobeService.fix_unevaluated_bone_weights(sk.get_path_name(), body_sk.get_path_name(), False))
+    if fix.get("success") is False:
+        raise RuntimeError(f"fix_unevaluated_bone_weights failed on {sk.get_path_name()} (not saved or attached): {fix}")
     EAL.save_asset(sk.get_path_name(), only_if_is_dirty=False)
     att = json.loads(unreal.MetaHumanCharacterService.attach_skeletal_mesh_to_blueprint(blueprint, component, sk.get_path_name(), "Body", True, ""))
     return {"success": bool(att.get("success")), "mesh": sk.get_path_name(), "mode": mode, "rigid_bone": rigid_bone,
@@ -227,6 +229,12 @@ def make_garment_variant(source_mesh, dst_folder, name, texture_variant="", max_
         raise RuntimeError("dst_folder must be under /Game and not /Game/Fab")
     MEL = unreal.MaterialEditingLibrary
     mesh_path = f"{dst_folder}/SKM_{name}"
+    # new assets only: an existing mesh or material copy would be re-pointed and force-saved
+    mat_paths = [f"{dst_folder}/Materials/{_split(s.get_editor_property('material_interface').get_path_name())[1]}_{name}"
+                 for s in src.get_editor_property("materials") if s.get_editor_property("material_interface")]
+    taken = [p for p in [mesh_path] + mat_paths if EAL.does_asset_exist(p)]
+    if taken:
+        raise RuntimeError(f"make_garment_variant writes new assets only; these exist (pick another name): {taken}")
     if not EAL.does_asset_exist(mesh_path):
         EAL.duplicate_asset(src.get_path_name().split(".")[0], mesh_path)
     mesh = unreal.load_asset(mesh_path)

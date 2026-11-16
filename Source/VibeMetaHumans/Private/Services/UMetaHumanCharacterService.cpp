@@ -3787,7 +3787,10 @@ FString UMetaHumanCharacterService::CaptureFaceForFit(const FString& CharacterPa
 	Meta->SetObjectField(TEXT("landmarks_cm"), Cm);
 	Meta->SetObjectField(TEXT("landmarks_px"), Px);
 	const FString MetaPath = Dir / (Name + TEXT(".json"));
-	FFileHelper::SaveStringToFile(VmhJson::Stringify(Meta), *MetaPath, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+	if (!FFileHelper::SaveStringToFile(VmhJson::Stringify(Meta), *MetaPath, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
+	{
+		return VmhJson::Error(TEXT("WRITE_FAILED"), FString::Printf(TEXT("wrote %s but not %s"), *PngPath, *MetaPath));
+	}
 
 	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
 	Out->SetStringField(TEXT("image"), PngPath);

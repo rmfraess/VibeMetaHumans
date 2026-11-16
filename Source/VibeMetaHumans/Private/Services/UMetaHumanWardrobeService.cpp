@@ -2028,6 +2028,11 @@ FString UMetaHumanWardrobeService::PostBuildFixup(const FString& BlueprintPath, 
 			{
 				R->SetStringField(TEXT("skipped"), TEXT("outside /Game or in /Game/Fab: not a build output"));
 			}
+			else if (!Asset->GetPathName().StartsWith(Folder + TEXT("/")))
+			{
+				// a custom groom can be shared by other characters; fill_groom_lods it on purpose instead
+				R->SetStringField(TEXT("skipped"), TEXT("outside the build folder: may be shared, call fill_groom_lods on it directly"));
+			}
 			else
 			{
 				FString ParseError;
@@ -2457,8 +2462,10 @@ namespace
 	TArray<bool> PushCandidates(const FLodGeom& Geom, const FReferenceSkeleton& Ref, const TSharedPtr<FJsonObject>& Options, TArray<double>& OutLimit, FString& OutError)
 	{
 		TArray<FBox3d> Only, Exclude;
-		ParseBoxes(OptArr(Options, TEXT("only_boxes")), Only, OutError);
-		ParseBoxes(OptArr(Options, TEXT("exclude_boxes")), Exclude, OutError);
+		if (!ParseBoxes(OptArr(Options, TEXT("only_boxes")), Only, OutError) || !ParseBoxes(OptArr(Options, TEXT("exclude_boxes")), Exclude, OutError))
+		{
+			return {};   // a malformed box must not widen the editable region; callers refuse on an empty result
+		}
 		TArray<FString> ExcludeBones;
 		const TArray<TSharedPtr<FJsonValue>> BoneList = Options->HasField(TEXT("exclude_bones")) ? OptArr(Options, TEXT("exclude_bones"))
 			: TArray<TSharedPtr<FJsonValue>>();
@@ -2475,10 +2482,12 @@ namespace
 		{
 			const TSharedPtr<FJsonObject> O = L->AsObject();
 			TArray<FBox3d> Box;
-			if (O.IsValid() && O->HasField(TEXT("box")) && ParseBoxes({ O->TryGetField(TEXT("box")) }, Box, OutError) && Box.Num() == 1)
+			if (!O.IsValid() || !O->HasField(TEXT("box")) || !ParseBoxes({ O->TryGetField(TEXT("box")) }, Box, OutError) || Box.Num() != 1)
 			{
-				Limits.Add({ Box[0], OptNum(O, TEXT("max_push"), MaxPush) });
+				OutError = TEXT("each limits entry is {\"box\": <box>, \"max_push\": cm}: ") + OutError;
+				return {};
 			}
+			Limits.Add({ Box[0], OptNum(O, TEXT("max_push"), MaxPush) });
 		}
 		const int32 NV = Geom.BindPos.Num();
 		TArray<bool> Cand;
@@ -2634,6 +2643,10 @@ FString UMetaHumanWardrobeService::PushBodyUnderGarments(const FString& Blueprin
 		const int32 NV = Geom.BindPos.Num();
 		TArray<double> Limit;
 		const TArray<bool> Cand = PushCandidates(Geom, Source->GetRefSkeleton(), Options, Limit, Error);
+		if (Cand.Num() != NV)
+		{
+			return VmhJson::Error(TEXT("BAD_OPTIONS"), Error);
+		}
 		TArray<FVector3d> RestNormal;
 		VertexNormals(Geom.BindPos, Geom.Tris, RestNormal);
 		TArray<double> Push;
@@ -2720,6 +2733,13 @@ FString UMetaHumanWardrobeService::PushBodyUnderGarments(const FString& Blueprin
 	Out->SetArrayField(TEXT("lods"), LodReports);
 	if (!bDryRun && Edited.Num() > 0)
 	{
+		FString OutPackage, OutName;
+		VmhAssets::SplitAssetPath(OutBodyMeshPath, OutPackage, OutName);
+		if (UEditorAssetLibrary::DoesAssetExist(OutPackage / OutName))
+		{
+			// DuplicateMesh would hand back that mesh and the source's LODs would overwrite it
+			return VmhJson::Error(TEXT("OUTPUT_EXISTS"), FString::Printf(TEXT("%s already exists; pass a new OutBodyMeshPath (each run starts from the source body)"), *OutBodyMeshPath), Out);
+		}
 		USkeletalMesh* Fitted = DuplicateMesh(Source, OutBodyMeshPath, Error);
 		if (!Fitted || !CommitLods(Fitted, Edited, Error))
 		{
@@ -2790,6 +2810,10 @@ FString UMetaHumanWardrobeService::MeasurePokeThrough(const FString& BlueprintPa
 		}
 		TArray<double> Limit;
 		const TArray<bool> Cand = PushCandidates(Geom, Body->GetRefSkeleton(), Options, Limit, Error);
+		if (Cand.Num() != Geom.BindPos.Num())
+		{
+			return VmhJson::Error(TEXT("BAD_OPTIONS"), Error);
+		}
 		TArray<TSharedPtr<FJsonValue>> PerGarment;
 		for (int32 G = 0; G < Garments.Names.Num(); ++G)
 		{

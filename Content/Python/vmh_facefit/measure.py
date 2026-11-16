@@ -44,9 +44,10 @@ if __name__ == "__main__":
         cx, cy = (p[468, 0] + p[473, 0]) / 2, (p[468, 1] + p[473, 1]) / 2
         ipd = np.linalg.norm(p[468, :2] - p[473, :2])
         half = ipd * 2.4
-        x0, y0 = int(cx - half), int(cy - half * 0.95)
-        x1, y1 = int(cx + half), int(cy + half * 1.05)
-        x0, y0 = max(0, x0), max(0, y0)
+        pad = int(half * 1.1) + 1   # pad so a face near the edge still crops square (resize would stretch it)
+        img = cv2.copyMakeBorder(img, pad, pad, pad, pad, cv2.BORDER_CONSTANT)
+        x0, y0 = int(cx - half) + pad, int(cy - half * 0.95) + pad
+        x1, y1 = int(cx + half) + pad, int(cy + half * 1.05) + pad
         crop = img[y0:y1, x0:x1]
         crop = cv2.resize(crop, (768, 768), interpolation=cv2.INTER_AREA)
         cv2.imwrite(dst, crop)
