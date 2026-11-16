@@ -1138,11 +1138,6 @@ FString UMetaHumanWardrobeService::HideBodyUnderGarments(const FString& Blueprin
 	{
 		return VmhJson::Error(TEXT("PROTECTED_ASSET"), TEXT("OutBodyMeshPath must be under /Game (and not /Game/Fab)"));
 	}
-	if (!bDryRun && UEditorAssetLibrary::DoesAssetExist(OutPackage / OutName))
-	{
-		// DuplicateMesh would hand back that mesh and the source's LODs would overwrite it
-		return VmhJson::Error(TEXT("OUTPUT_EXISTS"), FString::Printf(TEXT("%s already exists; pass a new OutBodyMeshPath (each run starts from the source body)"), *OutBodyMeshPath));
-	}
 
 	// garments: ["G_Jacket", {"component":"G_Pants","shell":3}]
 	FString ParseErr;
@@ -2598,6 +2593,12 @@ FString UMetaHumanWardrobeService::PushBodyUnderGarments(const FString& Blueprin
 	{
 		return VmhJson::Error(TEXT("PROTECTED_ASSET"), TEXT("OutBodyMeshPath must be under /Game (and not /Game/Fab)"));
 	}
+	if (!bDryRun && UEditorAssetLibrary::DoesAssetExist(OutPackage / OutName))
+	{
+		// DuplicateMesh would hand back that mesh and the source's LODs would overwrite it
+		return VmhJson::Error(TEXT("OUTPUT_EXISTS"), FString::Printf(TEXT("%s already exists; pass a new OutBodyMeshPath (each run starts from the source body)"), *OutBodyMeshPath));
+	}
+
 	TArray<FPose> Poses;
 	if (!ReadPoses(Options, BodyComp.Mesh, Poses, Error, Blueprint, TEXT("runtime")))
 	{

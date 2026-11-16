@@ -286,7 +286,8 @@ def make_garment_variant(source_mesh, dst_folder, name, texture_variant="", max_
                             swapped.append((t.get_name(), nt.get_name()))
                 MEL.recompile_material(cm)
             EAL.save_asset(dst, only_if_is_dirty=False)
-            used = [t.get_path_name() for t in MEL.get_used_textures(cm)] if hasattr(MEL, "get_used_textures") else []
+            # get_used_textures takes a Material only; an instance's parent textures cook too, so report the base's
+            used = [t.get_path_name() for t in MEL.get_used_textures(cm.get_base_material())] if hasattr(MEL, "get_used_textures") else []
             done[key] = cm
             report.append({"material": dst, "swapped": swapped, "pack_textures_left": [u for u in used if u.startswith("/Game/Fab")]})
         s.set_editor_property("material_interface", done[key])

@@ -68,6 +68,17 @@ public:
 	static FString GetSaveStatus(const FString& CharacterPath);
 
 	/**
+	 * Move sculpt landmarks toward targets and hold every other one in place, repeating translate+commit until
+	 * every residual is under ToleranceCm or MaxIterations runs out. TargetsJson: {"index":[dx,dy,dz]} cm deltas
+	 * (absolute positions instead when bAbsolute). HoldJson: "auto" (every non-target landmark, the default),
+	 * "none", or a JSON array of indices to hold. Refuses while the character wears grooms (spawning the Creator
+	 * preview with grooms on hung the editor for minutes) or while its face rig is on, and refuses any target that
+	 * looks like an ear landmark unless bAllowEars (moving them crumpled MissionCommander's ears, 2026-10-07).
+	 */
+	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	static FString MoveFaceLandmarks(const FString& CharacterPath, const FString& TargetsJson, const FString& HoldJson = TEXT("auto"), float ToleranceCm = 0.06f, int32 MaxIterations = 12, float Gain = 2.5f, bool bAllowEars = false, bool bAbsolute = false);
+
+	/**
 	 * The face-fit kit's front capture (Content/Python/vmh_facefit): the character's Creator editing actor spawned in a
 	 * private preview world (no level, no PIE), rendered orthographically front-on (camera on +Y, WidthCm across,
 	 * Size px square, centred on the face landmarks), written to OutDir/mh_<Tag>.png with mh_<Tag>.json - the meta file

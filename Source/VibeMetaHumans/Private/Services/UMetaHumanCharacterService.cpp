@@ -369,6 +369,26 @@ namespace
 		return FDateTime::Now().ToString(TEXT("%H:%M:%S"));
 	}
 
+	/** The groom slots (Hair, Eyebrows, ...) a character's wardrobe selections fill right now. */
+	TArray<FString> WornGroomSlots(UMetaHumanCharacter* Character)
+	{
+		static const TArray<FString> GroomSlots = { TEXT("Hair"), TEXT("Eyebrows"), TEXT("Eyelashes"), TEXT("Beard"), TEXT("Mustache"), TEXT("Peachfuzz") };
+		TArray<FString> Worn;
+		FString Unused;
+		if (UMetaHumanCollection* Collection = LiveCollection(GetSubsystem(Unused), Character))
+		{
+			for (const FMetaHumanPipelineSlotSelectionData& Data : Collection->GetMutableDefaultInstance()->GetSlotSelectionData())
+			{
+				const FString Slot = Data.Selection.SlotName.ToString();
+				if (!Data.Selection.SelectedItem.IsNull() && GroomSlots.Contains(Slot))
+				{
+					Worn.Add(Slot);
+				}
+			}
+		}
+		return Worn;
+	}
+
 	TArray<TSharedPtr<FJsonValue>> IntArray(const TArray<int32>& Values)
 	{
 		TArray<TSharedPtr<FJsonValue>> Out;
@@ -2514,6 +2534,172 @@ FString UMetaHumanCharacterService::ImportGroom(const FString& AlembicPath, cons
 // =====================================================================================================================
 // capture_face_for_fit (the face-fit kit's front capture, 2026-11-14)
 // =====================================================================================================================
+
+FString UMetaHumanCharacterService::MoveFaceLandmarks(const FString& CharacterPath, const FString& TargetsJson, const FString& HoldJson, float ToleranceCm, int32 MaxIterations, float Gain, bool bAllowEars, bool bAbsolute)
+{
+	FString ParseError;
+	TSharedPtr<FJsonObject> Targets = VmhJson::Parse(TargetsJson, ParseError);
+	if (!Targets.IsValid() || Targets->Values.Num() == 0)
+	{
+		return VmhJson::Error(TEXT("INVALID_JSON"), ParseError.IsEmpty() ? TEXT("TargetsJson must be a non-empty {\"index\":[dx,dy,dz]} object") : ParseError);
+	}
+	FEditContext Ctx = OpenForEdit(CharacterPath, true);
+	if (!Ctx.IsValid())
+	{
+		return Ctx.ToError();
+	}
+	const TArray<FString> Worn = WornGroomSlots(Ctx.Character);
+	if (Worn.Num() > 0)
+	{
+		return VmhJson::Error(TEXT("GROOMS_WORN"), FString::Printf(TEXT("%s wears grooms (%s); spawning the Creator preview with grooms on hung the shared editor for minutes. Clear the groom slots, fit the face, then add grooms back"), *CharacterPath, *FString::Join(Worn, TEXT(", "))));
+	}
+	if (Ctx.Subsystem->GetRiggingState(Ctx.Character) == EMetaHumanCharacterRigState::Rigged)
+	{
+		return VmhJson::Error(TEXT("FACE_RIGGED"), TEXT("the face rig is still on; call remove_face_rig first"));
+	}
+
+	TArray<FVector> L0;
+	Ctx.Subsystem->GetFaceLandmarks(Ctx.Character, L0);
+	if (L0.Num() == 0)
+	{
+		return VmhJson::Error(TEXT("NO_LANDMARKS"), TEXT("get_face_landmarks returned no points"));
+	}
+	TArray<int32> EarIdx, NeckIdx, SkullIdx;
+	ClassifyLandmarks(L0, EarIdx, NeckIdx, SkullIdx);
+	const TSet<int32> Ears(EarIdx);
+
+	TMap<int32, FVector> TargetAbs;
+	TArray<FString> BadIndex, EarRefused;
+	for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : Targets->Values)
+	{
+		const int32 Idx = FCString::Atoi(*Pair.Key);
+		const TArray<TSharedPtr<FJsonValue>>* Arr = nullptr;
+		if (!L0.IsValidIndex(Idx))
+		{
+			BadIndex.Add(Pair.Key + TEXT(" (out of range)"));
+			continue;
+		}
+		if (!Pair.Value->TryGetArray(Arr) || Arr->Num() != 3)
+		{
+			BadIndex.Add(Pair.Key + TEXT(" (expected [dx,dy,dz])"));
+			continue;
+		}
+		if (Ears.Contains(Idx) && !bAllowEars)
+		{
+			EarRefused.Add(Pair.Key);
+			continue;
+		}
+		const FVector V((*Arr)[0]->AsNumber(), (*Arr)[1]->AsNumber(), (*Arr)[2]->AsNumber());
+		TargetAbs.Add(Idx, bAbsolute ? V : L0[Idx] + V);
+	}
+	if (EarRefused.Num() > 0)
+	{
+		return VmhJson::Error(TEXT("EAR_LANDMARKS_REFUSED"), FString::Printf(TEXT("indices %s look like ear landmarks (moving them crumpled MissionCommander's ears, 2026-10-07); pass bAllowEars=true to move them anyway"), *FString::Join(EarRefused, TEXT(", "))));
+	}
+	if (TargetAbs.Num() == 0)
+	{
+		return VmhJson::Error(TEXT("NO_VALID_TARGETS"), FString::Printf(TEXT("no usable targets (bad: %s)"), *FString::Join(BadIndex, TEXT(", "))));
+	}
+	const int32 NumMoveTargets = TargetAbs.Num();
+
+	// holds: every other landmark pinned at its current position ("auto", the default); an explicit index list; or
+	// none held ("none") - only the named targets are driven and nothing else is corrected back.
+	const FString HoldMode = HoldJson.TrimStartAndEnd();
+	TArray<int32> HoldIdx;
+	if (HoldMode.IsEmpty() || HoldMode.Equals(TEXT("auto"), ESearchCase::IgnoreCase))
+	{
+		for (int32 i = 0; i < L0.Num(); ++i)
+		{
+			if (!TargetAbs.Contains(i)) { HoldIdx.Add(i); }
+		}
+	}
+	else if (!HoldMode.Equals(TEXT("none"), ESearchCase::IgnoreCase))
+	{
+		FString WrapErr;
+		TSharedPtr<FJsonObject> Wrapped = VmhJson::Parse(FString::Printf(TEXT("{\"h\":%s}"), *HoldMode), WrapErr);
+		const TArray<TSharedPtr<FJsonValue>>* Arr = nullptr;
+		if (!Wrapped.IsValid() || !Wrapped->TryGetArrayField(TEXT("h"), Arr))
+		{
+			return VmhJson::Error(TEXT("BAD_HOLD"), TEXT("HoldJson must be \"auto\", \"none\" or a JSON array of indices"));
+		}
+		for (const TSharedPtr<FJsonValue>& V : *Arr) { HoldIdx.Add(static_cast<int32>(V->AsNumber())); }
+	}
+	int32 NumHeld = 0;
+	for (int32 i : HoldIdx)
+	{
+		if (L0.IsValidIndex(i) && !TargetAbs.Contains(i))
+		{
+			TargetAbs.Add(i, L0[i]);
+			++NumHeld;
+		}
+	}
+
+	MaxIterations = FMath::Clamp(MaxIterations, 1, 64);
+	ToleranceCm = FMath::Max(0.001f, ToleranceCm);
+	const float Cap = 1.0f; // cm per iteration step (Master Smith's ed_p4_a2_ears_neck.py CAP)
+	TArray<TSharedPtr<FJsonValue>> IterationsLog;
+	float Worst = 0.f;
+	int32 WorstIndex = INDEX_NONE;
+	int32 IterationsRun = 0;
+	for (int32 It = 0; It < MaxIterations; ++It)
+	{
+		TArray<FVector> L;
+		Ctx.Subsystem->GetFaceLandmarks(Ctx.Character, L);
+		Worst = 0.f; WorstIndex = INDEX_NONE;
+		TArray<int32> MoveIdx;
+		TArray<FVector> MoveDelta;
+		for (const TPair<int32, FVector>& Pair : TargetAbs)
+		{
+			const FVector Residual = Pair.Value - L[Pair.Key];
+			const float Mag = Residual.GetAbsMax();
+			if (Mag > Worst) { Worst = Mag; WorstIndex = Pair.Key; }
+			if (Mag >= ToleranceCm * 0.5f)
+			{
+				const float G = Ears.Contains(Pair.Key) ? Gain : 1.f;
+				FVector Ask = Residual * G;
+				Ask.X = FMath::Clamp(Ask.X, -Cap, Cap);
+				Ask.Y = FMath::Clamp(Ask.Y, -Cap, Cap);
+				Ask.Z = FMath::Clamp(Ask.Z, -Cap, Cap);
+				MoveIdx.Add(Pair.Key);
+				MoveDelta.Add(Ask);
+			}
+		}
+		TSharedPtr<FJsonObject> IterRec = VmhJson::Obj();
+		IterRec->SetNumberField(TEXT("worst_cm"), Worst);
+		IterRec->SetNumberField(TEXT("worst_index"), WorstIndex);
+		IterRec->SetNumberField(TEXT("moved"), MoveIdx.Num());
+		IterationsLog.Add(MakeShared<FJsonValueObject>(IterRec));
+		IterationsRun = It + 1;
+		if (Worst < ToleranceCm || MoveIdx.Num() == 0)
+		{
+			break;
+		}
+		Ctx.Subsystem->TranslateFaceLandmarks(Ctx.Character, MoveIdx, MoveDelta);
+		Ctx.Subsystem->CommitFaceState(Ctx.Character);
+	}
+
+	TArray<FVector> LFinal;
+	Ctx.Subsystem->GetFaceLandmarks(Ctx.Character, LFinal);
+	TSharedPtr<FJsonObject> ResidualsFinal = VmhJson::Obj();
+	for (const TPair<int32, FVector>& Pair : TargetAbs)
+	{
+		ResidualsFinal->SetNumberField(FString::FromInt(Pair.Key), (Pair.Value - LFinal[Pair.Key]).GetAbsMax());
+	}
+
+	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
+	Out->SetNumberField(TEXT("targets"), NumMoveTargets);
+	Out->SetNumberField(TEXT("held"), NumHeld);
+	Out->SetNumberField(TEXT("iterations_run"), IterationsRun);
+	Out->SetBoolField(TEXT("converged"), Worst < ToleranceCm);
+	Out->SetNumberField(TEXT("worst_residual_cm"), Worst);
+	Out->SetArrayField(TEXT("iterations"), IterationsLog);
+	Out->SetObjectField(TEXT("final_residuals_cm"), ResidualsFinal);
+	if (BadIndex.Num() > 0)
+	{
+		Out->SetArrayField(TEXT("ignored"), VmhJson::StringArray(BadIndex));
+	}
+	return CharacterResult(Ctx, Out);
+}
 
 FString UMetaHumanCharacterService::CaptureFaceForFit(const FString& CharacterPath, const FString& OutDir, const FString& Tag, int32 Size, float WidthCm, bool bBaseColor, bool bTrack)
 {

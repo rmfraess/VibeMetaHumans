@@ -9,7 +9,7 @@ capture_face_for_fit replaces the jam's per-character ue_capture.py (copied into
 is rendered in a private preview world, so no level actor, no "/Temp unsaved" LoadLevel trouble and no empty capture
 from rendering in the same call as spawn_in_level. Gotchas found in the jam, kept here:
 - A base-colour capture (bBaseColor=True) is written with alpha 0; the service forces alpha to 255.
-- The character must wear no grooms while its landmarks move: remove hair/brows first.
+- The character must wear no grooms while its landmarks move (move_face_landmarks refuses): remove hair/brows first.
 - Preset skin and face indices are readable without an edit session; only the landmark moves need one.
 - Measure the LIT render; MediaPipe missed faces on flat base colour more often.
 """
@@ -26,8 +26,7 @@ def capture(character, out_dir, tag="front", size=768, width_cm=30.0, base_color
 
 
 def apply_deltas(character, deltas_json_path, tolerance_cm=0.06):
-    """Not on this fork: move_face_landmarks (hold + converge loop) is cut in favour of the native
-    MetaHumanCharacterEditorSubsystem landmark calls, which neither hold the other landmarks nor converge.
-    Apply fit.py's deltas through the metahuman-creator skill's landmark steps instead."""
-    raise NotImplementedError("move_face_landmarks is cut on this fork; apply the deltas with the native "
-                              "MetaHumanCharacterEditorSubsystem landmark calls (metahuman-creator skill)")
+    """move_face_landmarks with fit.py's output (relative moves; every other landmark held)."""
+    with open(deltas_json_path) as f:
+        deltas = json.load(f)["deltas"]
+    return json.loads(unreal.MetaHumanCharacterService.move_face_landmarks(character, json.dumps(deltas), "auto", tolerance_cm))

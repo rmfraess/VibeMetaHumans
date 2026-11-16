@@ -8,8 +8,7 @@ usage: python -I fit.py <ref.json> <mh_front_measure.json> <mh_front.json (captu
   mesh points; each sculpt landmark near the tracked mesh moves by the weighted displacement of its 4 nearest points,
   times gain (0.7), capped at 0.8 cm a step, then symmetrised (MetaHuman faces are symmetric; photos have yaw).
 - out_deltas.json {"deltas": {index: [dx, 0, dz] cm}, "mean_err_ipd": ...} feeds
-  the native MetaHumanCharacterEditorSubsystem landmark calls (metahuman-creator skill) - relative moves; this fork has
-  no move_face_landmarks, so nothing holds the other landmarks.
+  MetaHumanCharacterService.move_face_landmarks(character, json.dumps(d["deltas"])) - relative moves, the rest held.
 - Repeat capture -> measure -> fit -> move until mean_err_ipd stops falling (two or three rounds in the jam).
 """
 import sys, json, cv2, numpy as np

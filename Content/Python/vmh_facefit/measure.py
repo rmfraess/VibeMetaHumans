@@ -5,7 +5,7 @@ Runs OUTSIDE the editor, in any Python with opencv-python, numpy and mediapipe (
     python -I measure.py measure <ref_crop.png> <ref.json>          # 478 FaceMesh points (+ _overlay.png)
     python -I measure.py measure <mh_front.png> <mh_front_measure.json>
 The MetaHuman render comes from unreal.MetaHumanCharacterService.capture_face_for_fit (see ue_capture.py); fit.py turns
-the two measurements into sculpt-landmark moves (apply them with the native landmark calls, metahuman-creator skill). Measure lit renders (bBaseColor=False): the
+the two measurements into sculpt-landmark moves for move_face_landmarks. Measure lit renders (bBaseColor=False): the
 tracker found faces on lit renders more reliably.
 """
 import sys, json, cv2, numpy as np
