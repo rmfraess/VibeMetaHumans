@@ -872,6 +872,52 @@ FString UMetaHumanCharacterService::SetWardrobeItemParameters(const FString& Cha
 	return CharacterResult(Ctx, Out);
 }
 
+FString UMetaHumanCharacterService::RemoveWardrobeItem(const FString& CharacterPath, const FString& SlotName, const FString& ItemName)
+{
+	FEditContext Ctx = OpenForEdit(CharacterPath, true);
+	if (!Ctx.IsValid())
+	{
+		return Ctx.ToError();
+	}
+	UMetaHumanCollection* Collection = LiveCollection(Ctx.Subsystem, Ctx.Character);
+	if (!Collection)
+	{
+		return VmhJson::Error(TEXT("NO_COLLECTION"), TEXT("Character has no internal collection"));
+	}
+	FMetaHumanPaletteItemKey Key;
+	bool bFound = false;
+	for (const FMetaHumanCharacterPaletteItem& Item : Collection->GetItems())
+	{
+		if (Item.SlotName.ToString().Equals(SlotName, ESearchCase::IgnoreCase) && Item.GetItemKey().ToAssetNameString().Equals(ItemName, ESearchCase::IgnoreCase))
+		{
+			Key = Item.GetItemKey();
+			bFound = true;
+			break;
+		}
+	}
+	if (!bFound)
+	{
+		return VmhJson::Error(TEXT("ITEM_NOT_FOUND"), FString::Printf(TEXT("Slot '%s' holds no item named '%s'"), *SlotName, *ItemName));
+	}
+	FMetaHumanPipelineSlotSelection Worn;
+	FString Unused;
+	if (FindSlotSelection(Collection->GetMutableDefaultInstance(), SlotName, ItemName, Worn, Unused))
+	{
+		return VmhJson::Error(TEXT("ITEM_IS_WORN"), FString::Printf(TEXT("%s is what slot '%s' wears: select another item first"), *ItemName, *SlotName));
+	}
+	if (!Collection->TryRemoveItem(Key))
+	{
+		return VmhJson::Error(TEXT("REMOVE_FAILED"), FString::Printf(TEXT("The collection refused to remove %s"), *ItemName));
+	}
+	CommitWardrobeEdit(Ctx, Collection);
+
+	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
+	Out->SetStringField(TEXT("slot"), SlotName);
+	Out->SetStringField(TEXT("removed"), ItemName);
+	Out->SetStringField(TEXT("next"), TEXT("save the character; its assets can be deleted once nothing else references them"));
+	return CharacterResult(Ctx, Out);
+}
+
 FString UMetaHumanCharacterService::Build(const FString& CharacterPath, const FString& PipelineType, const FString& Quality, const FString& BuildPath, const FString& NameOverride, bool bPreserveBlueprintCustomization)
 {
 	const UEnum* PipelineEnum = StaticEnum<EMetaHumanDefaultPipelineType>();

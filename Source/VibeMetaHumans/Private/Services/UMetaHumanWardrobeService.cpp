@@ -589,23 +589,8 @@ FString UMetaHumanWardrobeService::MakeFullBodyFromDna(const FString& BodyMeshPa
 		}
 		if (DnaAsset.IsEmpty())
 		{
-			FString ParseError;
-			bool bOk = false;
-			const TSharedPtr<FJsonObject> Export = VmhJson::Parse(UMetaHumanCharacterService::ExportDna(CharacterPath, WorkFolder, TEXT(""), false, true), ParseError);
-			if (!Export.IsValid() || !Export->TryGetBoolField(TEXT("success"), bOk) || !bOk)
-			{
-				return VmhJson::Error(TEXT("DNA_EXPORT_FAILED"), Export.IsValid() ? Export->GetStringField(TEXT("error")) : ParseError);
-			}
-			const TArray<FString> Found = VmhAssets::FindAssetsOfClass(TEXT("/Script/RigLogicModule.DNA"), WorkFolder);
-			for (const FString& P : Found)
-			{
-				if (P.Contains(TEXT("body"), ESearchCase::IgnoreCase)) { DnaAsset = P; break; }
-			}
-			if (DnaAsset.IsEmpty() && Found.Num() == 1) { DnaAsset = Found[0]; }
-			if (DnaAsset.IsEmpty())
-			{
-				return VmhJson::Error(TEXT("DNA_EXPORT_FAILED"), FString::Printf(TEXT("no body DNA asset in %s (found: %s)"), *WorkFolder, *FString::Join(Found, TEXT(", "))));
-			}
+			// this fork cut MetaHumanCharacterService.ExportDna (Epic's 5.9 toolset exports DNA), so nothing is exported here
+			return VmhJson::Error(TEXT("DNA_NOT_FOUND"), FString::Printf(TEXT("no body DNA asset in %s: export the character's body DNA there first, or pass DnaMeshPath"), *WorkFolder));
 		}
 		Out->SetStringField(TEXT("dna_asset"), DnaAsset);
 		Dna = GenerateFrom(DnaAsset, GenError);

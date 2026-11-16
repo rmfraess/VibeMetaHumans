@@ -99,6 +99,14 @@ public:
 	static FString SetWardrobeItemParameters(const FString& CharacterPath, const FString& SlotName, const FString& ParametersJson, const FString& ItemName = TEXT(""), bool bClearOverrides = false);
 
 	/**
+	 * Take an item out of the character's wardrobe list for SlotName, so the character stops referencing its assets
+	 * (needed before deleting a groom it once offered). ItemName is the wardrobe item's asset name (e.g. WI_Hair_S_Clean).
+	 * Refuses the item the slot currently wears: select another first. Not saved.
+	 */
+	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	static FString RemoveWardrobeItem(const FString& CharacterPath, const FString& SlotName, const FString& ItemName);
+
+	/**
 	 * Assemble the character into a placeable Blueprint plus meshes/materials/grooms.
 	 * PipelineType: Cinematic | Optimized | UEFN. Quality: Low | Medium | High | Cinematic (Optimized/UEFN only).
 	 * BuildPath: content folder root (default /Game/MetaHumans); NameOverride: folder/asset name instead of the character name.
