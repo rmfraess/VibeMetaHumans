@@ -32,21 +32,21 @@ public:
 	 * parameter name. Returns out-parameters and "ReturnValue" as JSON. ClassPath accepts
 	 * "/Script/Module.Class", "Module.Class" or a bare class name.
 	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Object")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Execute"), Category = "VibeMetaHumans|Object")
 	static FString CallFunction(const FString& ClassPath, const FString& FunctionName, const FString& ArgsJson);
 
 	/**
 	 * Call an instance UFUNCTION on a loaded object (asset, subsystem settings object, actor...) with JSON
 	 * arguments keyed by parameter name or by position ("0", "1", ...). Returns out-parameters and "ReturnValue".
 	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Object")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Execute"), Category = "VibeMetaHumans|Object")
 	static FString CallObjectFunction(const FString& ObjectPath, const FString& FunctionName, const FString& ArgsJson);
 
 	/** List the callable UFUNCTIONs of a class with parameter names/types (static flag, out params, return type). */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Object")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Read"), Category = "VibeMetaHumans|Object")
 	static FString ListFunctions(const FString& ClassPath, const FString& NameFilter);
 
 	/** Describe a USTRUCT (field names, types, defaults) so an agent can build a JSON patch for it. */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Object")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Read"), Category = "VibeMetaHumans|Object")
 	static FString DescribeStruct(const FString& StructPath);
 };

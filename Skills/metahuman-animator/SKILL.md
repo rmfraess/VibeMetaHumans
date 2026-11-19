@@ -71,11 +71,16 @@ truncation flag. ARKit-mode takes have no depth and use the MonoFootage route.
    `unreal.MetaHumanCharacterEditorSubsystem.import_from_identity` in an acquired edit session.
    Identity auto-rig requires Epic login; `unreal.MetaHumanIdentity.log_in_to_auto_rig_service` is
    an instance method on the loaded Identity. Body type index 1–6 picks the preview preset.
-3. Use `anim.create_performance` with the capture data and, for depth, the prepared Identity.
-   For audio, use the SoundWave asset; set mood and output controls with `EditorToolset.ObjectToolset.SetProperties` on the Performance (`AudioDrivenAnimationSolveOverrides`, `AudioDrivenAnimationOutputControls`, `HeadMovementMode`).
-   `anim.configure_performance` can adjust the remaining settings.
-4. Process using `MetaHumanAnimatorToolset.MetaHumanAnimatorPerformanceTools.ProcessPerformance`.
-   Inspect its schema and await the async result; use `anim.get_status` to inspect the performance.
+3. Create, configure and process in one call with Epic's
+   `MetaHumanAnimatorToolset.MetaHumanAnimatorPerformanceTools`: `InspectFootageForPerformance(footage)`
+   first, then `GenerateAnimationFromFootage(footage, params)` (pick `params.inputType` from the
+   inspection; DepthFootage needs `params.identity`, MonoFootage needs `params.cameraIndex`) or
+   `GenerateAnimationFromAudio(audio, params)` (mood, intensity and MouthOnly/FullFace are in `params`).
+   Both are async; after completion read `animationDataStatus` and `diagnostics`, not just `bSucceeded`,
+   and reuse `performanceAssetPath` instead of re-running. To re-solve an existing Performance with
+   overrides, use `ProcessPerformance`.
+4. Use `anim.create_performance` / `anim.configure_performance` only to create or edit a Performance
+   without solving it. `anim.get_status` inspects any Performance (the engine has no status tool);
    `unreal.MetaHumanPerformance.cancel_pipeline` cancels a running pipeline on the loaded asset.
 5. Export animation with `unreal.MetaHumanAnimatorExportTools.export_performance_animation_sequence`,
    or a Level Sequence with `unreal.MetaHumanPerformanceExportUtils.export_level_sequence`.

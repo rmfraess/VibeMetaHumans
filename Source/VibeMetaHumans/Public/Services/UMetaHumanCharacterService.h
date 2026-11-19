@@ -41,15 +41,15 @@ public:
 	 * Create a MetaHuman Character asset. PresetCharacterPath may be empty (blank template) or point to a
 	 * preset / existing character to copy from (requires the optional content for Epic presets).
 	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Character")
 	static FString CreateCharacter(const FString& PackagePath, const FString& AssetName, const FString& PresetCharacterPath);
 
 	/** Summary JSON: rig state, DNA/texture flags, body type, skin/eye tone, active body constraints, wardrobe selections. */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Read"), Category = "VibeMetaHumans|Character")
 	static FString GetSummary(const FString& CharacterPath);
 
 	/** Save the character asset. Routes to save_deferred when the character is in an edit session (see there for why). */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Character")
 	static FString Save(const FString& CharacterPath);
 
 	/**
@@ -60,11 +60,11 @@ public:
 	 * once; poll get_save_status. A newer save_deferred on the same character re-arms the timer; if it is back in
 	 * an edit session when the tick fires, that save is skipped (the next save_deferred tries again).
 	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Character")
 	static FString SaveDeferred(const FString& CharacterPath, float DelaySeconds = 15.f, int32 MinFrames = 45);
 
 	/** pending / status (requested|skipped|saved|failed) / requested_at / at / seconds / error for the character's last (or in-flight) save_deferred. */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Read"), Category = "VibeMetaHumans|Character")
 	static FString GetSaveStatus(const FString& CharacterPath);
 
 	/**
@@ -75,7 +75,7 @@ public:
 	 * preview with grooms on hung the editor for minutes) or while its face rig is on, and refuses any target that
 	 * looks like an ear landmark unless bAllowEars (moving them crumpled MissionCommander's ears, 2026-10-07).
 	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Character")
 	static FString MoveFaceLandmarks(const FString& CharacterPath, const FString& TargetsJson, const FString& HoldJson = TEXT("auto"), float ToleranceCm = 0.06f, int32 MaxIterations = 12, float Gain = 2.5f, bool bAllowEars = false, bool bAbsolute = false);
 
 	/**
@@ -87,15 +87,15 @@ public:
 	 * come back with alpha 0). bTrack also runs MetaHuman's face contour tracker on the render (tracked_contours_px).
 	 * OutDir default Saved/VibeMetaHumans/FaceFit/<Character>. Refuses while the character wears grooms (GROOMS_WORN).
 	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Character")
 	static FString CaptureFaceForFit(const FString& CharacterPath, const FString& OutDir = TEXT(""), const FString& Tag = TEXT("front"), int32 Size = 768, float WidthCm = 30.f, bool bBaseColor = false, bool bTrack = true);
 
 	/** Switch to a fixed legacy body type (f_med_nrw, m_tal_ovw, ...) or back to BlendableBody. See MetaHumanSetupService.get_enum_options. */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Character")
 	static FString SetBodyType(const FString& CharacterPath, const FString& BodyType);
 
 	/** Reset the face back to the archetype (removes sculpting; keeps skin/eyes settings). */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Character")
 	static FString ResetFace(const FString& CharacterPath);
 
 	/**
@@ -106,7 +106,7 @@ public:
 	 * (bUseOmbre, OmbreU/V/Color/Shift/Contrast/Intensity) and Highlights (bUseHighlights, HighlightsU/V/Color/
 	 * Blending/Intensity/Variation) groups. Opens the character for editing and assembles its preview when needed.
 	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Character")
 	static FString GetWardrobeItemParameters(const FString& CharacterPath, const FString& SlotName = TEXT(""));
 
 	/**
@@ -118,7 +118,7 @@ public:
 	 * slot holds several. bClearOverrides first resets the item to its defaults (alone = reset). Works on the
 	 * Creator's live preview and commits it to the asset, so it is safe while the Creator is open. Not saved.
 	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Character")
 	static FString SetWardrobeItemParameters(const FString& CharacterPath, const FString& SlotName, const FString& ParametersJson, const FString& ItemName = TEXT(""), bool bClearOverrides = false);
 
 	/**
@@ -126,7 +126,7 @@ public:
 	 * (needed before deleting a groom it once offered). ItemName is the wardrobe item's asset name (e.g. WI_Hair_S_Clean).
 	 * Refuses the item the slot currently wears: select another first. Not saved.
 	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Character")
 	static FString RemoveWardrobeItem(const FString& CharacterPath, const FString& SlotName, const FString& ItemName);
 
 	/**
@@ -146,7 +146,7 @@ public:
 	 * and use restore_blueprint_components with skip patterns. Asset-level edits (groom LODs, material tweaks on built assets, an
 	 * edited built body) are NOT covered: they are overwritten by the build.
 	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Character")
 	static FString Build(const FString& CharacterPath, const FString& PipelineType, const FString& Quality, const FString& BuildPath, const FString& NameOverride, bool bPreserveBlueprintCustomization = false);
 
 	/**
@@ -155,15 +155,15 @@ public:
 	 * the game thread for several minutes once it starts - poll get_build_status rather than waiting on this call.
 	 * bPreserveBlueprintCustomization: as for build().
 	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Character")
 	static FString BuildAsync(const FString& CharacterPath, const FString& PipelineType, const FString& Quality, const FString& BuildPath, const FString& NameOverride, bool bPreserveBlueprintCustomization = false);
 
 	/** status (queued|running|done|failed) / seconds / blueprints / output_folder / error for the character's last (or in-flight) build_async. */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Read"), Category = "VibeMetaHumans|Character")
 	static FString GetBuildStatus(const FString& CharacterPath);
 
 	/** status (running|done|failed_or_not_requested) for a pending auto-rig request (the subsystem's request_auto_rigging already reports progress on the subsystem; this just shapes it the same way as get_build_status). */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Read"), Category = "VibeMetaHumans|Character")
 	static FString GetAutoRigStatus(const FString& CharacterPath);
 
 	// =================================================================
@@ -180,7 +180,7 @@ public:
 	 * mesh takes 1-3 minutes. Afterwards the character holds the solved body in the MESH'S pose: MetaHumanCharacterExportBlueprintLibrary.export_posed_dna
 	 * before the subsystem's commit_posed_state_as_a_pose.
 	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Character")
 	static FString ImportFromCustomMesh(const FString& CharacterPath, const FString& MeshPath, const FString& HeadMeshPath, bool bAutoSolve = true, bool bTrackFace = true, int32 TrackingImageSize = 1024);
 
 	/**
@@ -188,7 +188,7 @@ public:
 	 * Mesh" action, synchronous. Skeleton: "body" (the MetaHuman body skeleton; a posed/combined DNA), "face", "none"
 	 * (a skeleton is generated), or a skeleton asset path.
 	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Character")
 	static FString GenerateSkeletalMeshFromDna(const FString& DnaPath, const FString& PackagePath, const FString& AssetName, const FString& Skeleton = TEXT("body"));
 
 	// =================================================================
@@ -200,7 +200,7 @@ public:
 	 * the Content Browser's Asset Actions > Export does. Empty material slots are filled with the default material
 	 * for the export (an empty slot crashed the exporter, 2026-10-04).
 	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Character")
 	static FString ExportFbx(const FString& AssetPath, const FString& FilePath);
 
 	/**
@@ -208,7 +208,7 @@ public:
 	 * materials restored by slot name afterwards (bKeepMaterials): the Content Browser's "Reimport" without the
 	 * dialog. Refuses (SKELETON_MISMATCH) rather than leaving the Blueprint pointing at a retargeted mesh.
 	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Character")
 	static FString ReimportSkeletalMesh(const FString& AssetPath, const FString& FbxPath, bool bKeepMaterials = true);
 
 	/**
@@ -218,7 +218,7 @@ public:
 	 * 32x32 placeholder with no miplevels: a texture-pipeline stall after long editor sessions (2026-10-07) that
 	 * rendered a face white and hangs the next save of any material instance that uses it - restart the editor first.
 	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Character")
 	static FString ImportTexture(const FString& FilePath, const FString& PackagePath, const FString& AssetName, const FString& Kind = TEXT("color"), bool bFlipGreen = false);
 
 	/**
@@ -232,7 +232,7 @@ public:
 	 * vertices weighted to bones the parent does not evaluate (they collapse to the actor origin: spikes from the cuffs
 	 * to the floor; fix a copy with MetaHumanWardrobeService.fix_unevaluated_bone_weights) and to bones it lacks.
 	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Character")
 	static FString AttachSkeletalMeshToBlueprint(const FString& BlueprintPath, const FString& ComponentName, const FString& SkeletalMeshPath, const FString& ParentComponentName = TEXT("Body"), bool bLeaderPose = true, const FString& OverrideMaterials = TEXT(""));
 
 	/**
@@ -240,7 +240,7 @@ public:
 	 * MetaHuman's Body) with a relative transform (centimetres, degrees): a rigid accessory - a headset, a visor, a
 	 * horn - rides the bone without any skinning. Replaces a component of that name if one exists.
 	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Character")
 	static FString AttachStaticMeshToBlueprint(const FString& BlueprintPath, const FString& ComponentName, const FString& StaticMeshPath, const FString& ParentComponentName, const FString& SocketName, FVector RelativeLocation, FRotator RelativeRotation);
 
 	/**
@@ -260,7 +260,7 @@ public:
 	 * bInverseSocketTransform: the relative transform is the inverse of that bone's reference-pose component transform,
 	 * so a groom authored in the mesh's component space (out/_HairTools exports) lands where it was authored;
 	 * RelativeLocation/RelativeRotation are applied on top. */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Character")
 	static FString AddGroomToBlueprint(const FString& BlueprintPath, const FString& ComponentName, const FString& GroomAssetPath, const FString& TargetComponent = TEXT("Face"), const FString& MaterialFromComponent = TEXT(""), bool bSaveBinding = true,
 		const FString& SocketName = TEXT(""), bool bInverseSocketTransform = false, FVector RelativeLocation = FVector::ZeroVector, FRotator RelativeRotation = FRotator::ZeroRotator);
 
@@ -271,6 +271,6 @@ public:
 	 * HairWidthCm > 0 turns the width override on at that width with TipScale at the tips (Blender's Alembic carries no
 	 * widths: without it every strand took a hair-thin default and the groom read as a translucent ghost). Pass
 	 * HairWidthCm <= 0 to keep the file's own widths. Nothing is saved: save the groom in a LATER call. */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Character")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Character")
 	static FString ImportGroom(const FString& AlembicPath, const FString& PackagePath, const FString& AssetName, bool bRigidBinding = true, float HairWidthCm = 0.013f, float TipScale = 0.6f);
 };

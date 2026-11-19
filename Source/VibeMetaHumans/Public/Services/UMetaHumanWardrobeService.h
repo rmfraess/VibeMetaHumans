@@ -53,7 +53,7 @@ public:
 	 * mesh); LeaderMeshPath is the Blueprint's Body mesh. bDryRun only counts. Reports per LOD the leader LODs checked,
 	 * the vertices fixed and the bones they used.
 	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Wardrobe")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Wardrobe")
 	static FString FixUnevaluatedBoneWeights(const FString& GarmentMeshPath, const FString& LeaderMeshPath, bool bDryRun = false);
 
 	/**
@@ -64,7 +64,7 @@ public:
 	 * as that leader's follower (vertices weighted to bones the leader does not evaluate or lacks). Bone name lists are
 	 * capped at 40 unless bListAllBones. Use it instead of guessing lod_info / get_lod_num / bones_to_remove in Python.
 	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Wardrobe")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Read"), Category = "VibeMetaHumans|Wardrobe")
 	static FString DescribeSkeletalMesh(const FString& MeshPath, const FString& LeaderMeshPath = TEXT(""), bool bListAllBones = false);
 
 	/**
@@ -77,7 +77,7 @@ public:
 	 * same vertices (built LOD n is often DNA LOD n or n+1).
 	 * bDryRun reports the matching without writing the output mesh (the DNA source mesh is still generated).
 	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Wardrobe")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Wardrobe")
 	static FString MakeFullBodyFromDna(const FString& BodyMeshPath, const FString& OutMeshPath, const FString& DnaMeshPath, const FString& CharacterPath, bool bDryRun = false);
 
 	/**
@@ -96,7 +96,7 @@ public:
 	 * bAssignToBlueprint points the cut component at the result. For closed garments only: under a dress or an open
 	 * garment a deleted patch is a hole from some camera - use push_body_under_garments.
 	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Wardrobe")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Wardrobe")
 	static FString HideBodyUnderGarments(const FString& BlueprintPath, const FString& GarmentComponentsJson, const FString& OutBodyMeshPath, const FString& OptionsJson = TEXT("{}"), bool bAssignToBlueprint = false, bool bDryRun = false);
 
 	/**
@@ -114,7 +114,7 @@ public:
 	 * it the knit came out through the jacket's shoulders), capped at their surface minus under_gap cm. A violation an
 	 * outer garment leaves no room for is reported as blocked (it is hidden by that garment anyway).
 	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Wardrobe")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Wardrobe")
 	static FString PushGarmentOutOfMesh(const FString& BlueprintPath, const FString& GarmentComponent, const FString& ObstacleComponent = TEXT("Face"), const FString& OutMeshPath = TEXT(""), const FString& OptionsJson = TEXT("{}"), bool bDryRun = false);
 
 	/**
@@ -122,7 +122,7 @@ public:
 	 * from the class default) and class defaults, as JSON; also written to OutFilePath when given. Take it before a
 	 * MetaHuman rebuild, restore it after.
 	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Wardrobe")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Wardrobe")
 	static FString SnapshotBlueprintComponents(const FString& BlueprintPath, const FString& OutFilePath = TEXT(""));
 
 	/**
@@ -131,7 +131,7 @@ public:
 	 * to the file snapshot_blueprint_components wrote. SkipPatternsJson: ["LODSync.*", "*.RelativeLocation"] wildcards
 	 * on "Component.Property". bDryRun lists what would change. Compiles; does not save.
 	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Wardrobe")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Wardrobe")
 	static FString RestoreBlueprintComponents(const FString& BlueprintPath, const FString& Snapshot, const FString& SkipPatternsJson = TEXT("[]"), bool bAddMissing = true, bool bApplyToExisting = true, bool bDryRun = false);
 
 	/**
@@ -140,7 +140,7 @@ public:
 	 * meshes). bMakeHiddenLodsVisible also turns hidden LODs (brows at LOD5-7) into visible cards. Rebuilds the groom's
 	 * derived data; its bindings rebuild on their own (about a minute). bDryRun lists the gaps only.
 	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Wardrobe")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Wardrobe")
 	static FString FillGroomLods(const FString& GroomPath, bool bMakeHiddenLodsVisible = false, bool bDryRun = false);
 
 	/**
@@ -161,7 +161,7 @@ public:
 	 * depth. bAssignToBlueprint points Body at the result. Deleting is still right for closed garments
 	 * (hide_body_under_garments: legs in trousers, feet in shoes); run it on the pushed body when both apply.
 	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Wardrobe")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Wardrobe")
 	static FString PushBodyUnderGarments(const FString& BlueprintPath, const FString& GarmentComponentsJson, const FString& OutBodyMeshPath, const FString& OptionsJson = TEXT("{}"), bool bAssignToBlueprint = false, bool bDryRun = false);
 
 	/**
@@ -170,7 +170,7 @@ public:
 	 * options as push_body_under_garments (poses default to runtime evaluation; options.body_mesh measures another body
 	 * than the Body component's; options.lods default [0]). Run it before and after a fit, in the poses the game uses.
 	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Wardrobe")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Read"), Category = "VibeMetaHumans|Wardrobe")
 	static FString MeasurePokeThrough(const FString& BlueprintPath, const FString& GarmentComponentsJson, const FString& OptionsJson = TEXT("{}"));
 
 	/**
@@ -181,7 +181,7 @@ public:
 	 * keep_boxes, delete_boxes, source_body). Pass the rest AND the seated pose. bAssignToBlueprint points the inner
 	 * component at the copy.
 	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Wardrobe")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Wardrobe")
 	static FString TrimInnerGarment(const FString& BlueprintPath, const FString& InnerComponent, const FString& OuterComponentsJson, const FString& OutMeshPath, const FString& OptionsJson = TEXT("{}"), bool bAssignToBlueprint = false, bool bDryRun = false);
 
 	/**
@@ -195,7 +195,7 @@ public:
 	 * "body_component":"Body"}. Returns the files (and the fraction of non-dark pixels, to catch an empty frame). Needs
 	 * a rendering editor (not -nullrhi). Grooms may not draw in a scene capture: judge hair in PIE.
 	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Wardrobe")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Wardrobe")
 	static FString CaptureFitViews(const FString& BlueprintPath, const FString& AnimPath = TEXT(""), float Time = 0.f, const FString& ViewsJson = TEXT("[\"front\",\"three_quarter\",\"side\",\"back\"]"), const FString& OutDir = TEXT(""), const FString& OptionsJson = TEXT("{}"));
 
 	/**
@@ -205,7 +205,7 @@ public:
 	 * {"anim", "stride": s}]. Reports, per pose, how far the runtime pose is from sampling the clip on the asset (the
 	 * jam measured up to 14 cm in seated poses). Feed the file to the fit tools: {"poses": [{"file": <file>}]}.
 	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Wardrobe")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Wardrobe")
 	static FString DumpRuntimePoses(const FString& BlueprintPath, const FString& PosesJson, const FString& OutFilePath = TEXT(""));
 
 	/**
@@ -213,7 +213,7 @@ public:
 	 * the running PIE world when there is one, else the editor world: the exact pose the game shows, for the fit tools'
 	 * {"poses": [{"file": ...}]}. Call it at the moments that matter while the game plays.
 	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Wardrobe")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Wardrobe")
 	static FString DumpActorPose(const FString& ActorLabel, const FString& ComponentName = TEXT("Body"), const FString& OutFilePath = TEXT(""), const FString& Label = TEXT(""), bool bAppend = true);
 
 	/**
@@ -228,7 +228,7 @@ public:
 	 * enabled). Check it with capture_fit_views (focus "chest", seated and standing). Saves the new mesh only.
 	 * Jam lesson: a piece along the body's centre line over an opening (a tie on an open collar) has no stable surface.
 	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Wardrobe")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Wardrobe")
 	static FString AddSkinnedAccessory(const FString& BlueprintPath, const FString& StaticMeshPath, const FString& ComponentName, const FString& Mode = TEXT("surface"), const FString& SurfaceComponentsJson = TEXT("[\"Body\"]"), const FString& Bone = TEXT("spine_05"), const FString& RelativeJson = TEXT("{}"), const FString& OutMeshPath = TEXT(""));
 
 	/**
@@ -239,7 +239,7 @@ public:
 	 * texture still referenced (a material instance copy keeps the pack parent's defaults). GeometryScript-free, but runs
 	 * in Content/Python/vmh_wardrobe.py.
 	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Wardrobe")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Wardrobe")
 	static FString MakeGarmentVariant(const FString& SourceMeshPath, const FString& DestFolder, const FString& Name, const FString& TextureVariant = TEXT(""), int32 MaxTextureSize = 1024);
 
 	/**
@@ -250,7 +250,7 @@ public:
 	 * attach it. A Chaos outfit made for another body shape is refitted by a throwaway build instead (see the skill).
 	 * Runs Content/Python/vmh_wardrobe.py on GeometryScript.
 	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Wardrobe")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Wardrobe")
 	static FString TransferSkinWeights(const FString& TargetMeshPath, const FString& SourceMeshPath, const FString& OutMeshPath = TEXT(""), const FString& Method = TEXT("closest"));
 
 	/**
@@ -265,7 +265,7 @@ public:
 	 * Only /Game assets outside /Game/Fab are edited. Body fits (hide/push) are NOT redone: re-run them on the new body.
 	 * bDryRun reports what it would change. Saves nothing; returns the dirty packages.
 	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Wardrobe")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Wardrobe")
 	static FString PostBuildFixup(const FString& BlueprintPath, const FString& OptionsJson = TEXT("{}"), bool bDryRun = false);
 
 	/**
@@ -277,7 +277,7 @@ public:
 	 * for EVERY listed override (read the list first: an override may be meant), then save the level / its external
 	 * actor packages. MapPath is refused (UNSAVED_LEVEL) while the open level has unsaved changes.
 	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Wardrobe")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Wardrobe")
 	static FString AuditPlacedInstances(const FString& BlueprintPath, bool bClearOverrides = false, const FString& MapPath = TEXT(""));
 
 	/**

@@ -43,19 +43,19 @@ public:
 	 * Create a MetaHuman Performance asset. InputType: MonoFootage | DepthFootage | Audio.
 	 * CaptureDataPath for footage routes; IdentityPath required for DepthFootage; AudioPath (SoundWave) for Audio.
 	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Animator")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Animator")
 	static FString CreatePerformance(const FString& PackagePath, const FString& AssetName, const FString& InputType, const FString& CaptureDataPath, const FString& IdentityPath, const FString& AudioPath);
 
 	/**
 	 * Patch any performance property (JSON by property name): HeadMovementMode, SolveType, bSkipDiagnostics,
 	 * bHeadStabilization, StartFrameToProcess/EndFrameToProcess, FocalLength, UserExcludedFrames, ...
 	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Animator")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Animator")
 	static FString ConfigurePerformance(const FString& PerformancePath, const FString& JsonPatch);
 
 
 	/** Status JSON: input type, inputs, can_process, is_processing, processed_frames, can_export, diagnostics. */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Animator")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Read"), Category = "VibeMetaHumans|Animator")
 	static FString GetStatus(const FString& PerformancePath);
 
 	// =================================================================
@@ -71,7 +71,7 @@ public:
 	 * (bakes store them lowercased). OptionsJson: {"curves":[...], "existing_peak":0.6, "clear":1.2, "first_min":0.6,
 	 * "first_max":1.4, "name_prefix":"FA_", "save":false}. bDryRun lists the planned blink times only.
 	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Animator")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Animator")
 	static FString AddBlinks(const FString& AnimOrFolderPath, float MinIntervalSeconds = 2.8f, float MaxIntervalSeconds = 4.2f, bool bDryRun = false, const FString& OptionsJson = TEXT("{}"));
 
 	/**
@@ -85,6 +85,6 @@ public:
 	 * the Face component's anim class on every built Blueprint (MetaHumanWardrobeService.post_build_fixup
 	 * face_anim_class) and play lines with PlaySlotAnimationAsDynamicMontage on the Face's anim instance. Not saved.
 	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|Animator")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Animator")
 	static FString CreateFaceAnimBlueprint(const FString& PackagePath, const FString& AssetName = TEXT("ABP_Face_Slot"), const FString& SkeletonPath = TEXT(""), const FString& BlinkLoopAnimPath = TEXT(""), const FString& SlotName = TEXT("DefaultSlot"));
 };

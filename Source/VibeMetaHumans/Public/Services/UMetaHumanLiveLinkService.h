@@ -39,23 +39,23 @@ public:
 	 * name (empty = first device). FormatIndex picks from the device's formats (native MetaHumanLocalLiveLinkSourceBlueprint.get_video_formats) (negative = a sensible 720p-1080p
 	 * 24-60 fps format). Blocks for a few seconds while the device starts.
 	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|LiveLink")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|LiveLink")
 	static FString AddVideoSource(const FString& DeviceName, const FString& SubjectName, int32 FormatIndex = -1);
 
 	/** Add a MetaHuman Audio Live Link source + subject from a microphone (DeviceName matches part of the name; empty = first). */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|LiveLink")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|LiveLink")
 	static FString AddAudioSource(const FString& DeviceName, const FString& SubjectName);
 
 	/** All Live Link sources: guid, type, status, machine. */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|LiveLink")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Read"), Category = "VibeMetaHumans|LiveLink")
 	static FString ListSources();
 
 	/** Remove one source by guid (from list_sources), or every source when SourceGuid is "all". */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|LiveLink")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|LiveLink")
 	static FString RemoveSource(const FString& SourceGuid);
 
 	/** Read/patch a subject's settings object (smoothing, calibration alpha, mood for audio subjects...). Empty patch = read only. */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|LiveLink")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|LiveLink")
 	static FString SubjectSettings(const FString& SubjectName, const FString& JsonPatch);
 
 	// =================================================================
@@ -67,11 +67,11 @@ public:
 	 * its components, any LiveLinkComponentController, and the face AnimBP's LLink_Face_Subj variable. When the face
 	 * component is not running a Live Link AnimBP yet, bSwitchFaceToLiveLinkAnimBP swaps it to ABP_MH_LiveLink first.
 	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|LiveLink")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|LiveLink")
 	static FString BindSubjectToActor(const FString& ActorLabel, const FString& SubjectName, bool bSwitchFaceToLiveLinkAnimBP = true);
 
 	/** Start a Take Recorder recording of the given Live Link subjects (opens the Take Recorder panel). */
-	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeMetaHumans|LiveLink")
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|LiveLink")
 	static FString StartTakeRecording(const TArray<FString>& SubjectNames);
 
 };
