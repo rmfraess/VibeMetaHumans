@@ -79,8 +79,12 @@ truncation flag. ARKit-mode takes have no depth and use the MonoFootage route.
    Both are async; after completion read `animationDataStatus` and `diagnostics`, not just `bSucceeded`,
    and reuse `performanceAssetPath` instead of re-running. To re-solve an existing Performance with
    overrides, use `ProcessPerformance`.
-4. Use `anim.create_performance` / `anim.configure_performance` only to create or edit a Performance
-   without solving it. `anim.get_status` inspects any Performance (the engine has no status tool);
+4. To create a blank Performance without solving it: `f = unreal.MetaHumanPerformanceFactoryNew()`,
+   `p = unreal.AssetToolsHelpers.get_asset_tools().create_asset('Perf_x', '/Game/MHA', unreal.MetaHumanPerformance, f)`,
+   then set `input_type` / `audio` with `p.set_editor_property`. Edit settings with
+   `EditorToolset.ObjectToolset.SetProperties` and read them back with `GetProperties`. Inspect any Performance
+   with `p.can_process()`, `p.is_processing()`, `p.can_export_animation()` and
+   `p.diagnostics_indicates_processing_issue()` (the engine has no status tool);
    `unreal.MetaHumanPerformance.cancel_pipeline` cancels a running pipeline on the loaded asset.
 5. Export animation with `unreal.MetaHumanAnimatorExportTools.export_performance_animation_sequence`,
    or a Level Sequence with `unreal.MetaHumanPerformanceExportUtils.export_level_sequence`.
@@ -125,7 +129,7 @@ anim.add_blinks("/Game/Anims/Face", 2.8, 4.2, False, '{"name_prefix": "FA_", "sa
 
 - Capture data assets land under `/Game/MHA` style folders chosen by Capture Manager settings; the
   ingest result gives the real path, use it.
-- One performance processes at a time. Check the async result and `get_status` after a timeout
+- One performance processes at a time. Check the async result and `p.is_processing()` after a timeout
   rather than starting the operation again.
 - An identity must be prepared (`face.has_predictive_solvers`) before a DepthFootage performance
   reports `can_process`.

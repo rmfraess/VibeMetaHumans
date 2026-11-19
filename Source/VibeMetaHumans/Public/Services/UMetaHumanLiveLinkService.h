@@ -16,7 +16,7 @@
  *    must be in MetaHuman Animator mode and show this machine's address).
  *  - MetaHuman Audio source: a microphone driving audio-to-face (add_audio_source).
  * Each creates a Live Link subject. Bind the subject to a placed, assembled MetaHuman actor with
- * bind_subject_to_actor, then record with start_take_recording (Take Recorder) to get an Animation
+ * bind_subject_to_actor, then record with unreal.TakeRecorderBlueprintLibrary (Take Recorder) to get an Animation
  * Sequence, or process offline with MetaHumanAnimatorService for best quality.
  *
  * Python Usage:
@@ -25,7 +25,9 @@
  *   r = json.loads(svc.add_video_source("", "Webcam", -1))        # first camera, auto format
  *   # Capture neutrals on the unreal.MetaHumanLiveLinkSubjectSettings object while performer holds a neutral face.
  *   svc.bind_subject_to_actor("BP_MH_Hero", "Webcam")
- *   svc.start_take_recording(["Webcam"]); ...; unreal.TakeRecorderBlueprintLibrary.open_take_recorder_panel().stop_recording()
+ *   panel = unreal.TakeRecorderBlueprintLibrary.open_take_recorder_panel()
+ *   panel.get_sources().add_source(unreal.TakeRecorderLiveLinkSource).set_editor_property("subject_name", "Webcam")
+ *   panel.start_recording(); ...; panel.stop_recording()
  */
 UCLASS(BlueprintType)
 class VIBEMETAHUMANS_API UMetaHumanLiveLinkService : public UToolsetDefinition
@@ -54,10 +56,6 @@ public:
 	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|LiveLink")
 	static FString RemoveSource(const FString& SourceGuid);
 
-	/** Read/patch a subject's settings object (smoothing, calibration alpha, mood for audio subjects...). Empty patch = read only. */
-	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|LiveLink")
-	static FString SubjectSettings(const FString& SubjectName, const FString& JsonPatch);
-
 	// =================================================================
 	// Character binding and recording
 	// =================================================================
@@ -69,9 +67,5 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|LiveLink")
 	static FString BindSubjectToActor(const FString& ActorLabel, const FString& SubjectName, bool bSwitchFaceToLiveLinkAnimBP = true);
-
-	/** Start a Take Recorder recording of the given Live Link subjects (opens the Take Recorder panel). */
-	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|LiveLink")
-	static FString StartTakeRecording(const TArray<FString>& SubjectNames);
 
 };

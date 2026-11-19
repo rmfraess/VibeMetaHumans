@@ -12,6 +12,7 @@ import sys
 import traceback
 
 import unreal
+import vmh_wardrobe
 
 ARGS = [a for a in sys.argv[1:]]
 GROUPS = set((ARGS[0] if ARGS else "all").replace(",", "+").split("+"))   # -ExecCmds splits on commas: use +
@@ -297,8 +298,9 @@ def t_accessory():
         out = f"{TEST}/SKM_AccTest_{mode}_{RUN}"
         if EAL.does_asset_exist(out):
             EAL.delete_asset(out)
-        r = J(wd.add_skinned_accessory(path, sm[0], f"ACC_Test_{mode}", mode, '["Body"]', "spine_05",
-                                       json.dumps({"location": [0, 12, 0]}), out))
+        r = J(vmh_wardrobe.run_json("add_skinned_accessory", json.dumps(dict(
+            blueprint=path, static_mesh=sm[0], component=f"ACC_Test_{mode}", mode=mode, surface_components=["Body"], bone="spine_05",
+            relative={"location": [0, 12, 0]}, out_path=out))))
         check(f"accessory.{mode}", r.get("success"), static_mesh=sm[0], mesh=r.get("mesh"), rigid_bone=r.get("rigid_bone"),
               top=r.get("top_bones"), lod_fix=r.get("lod_fix"), error=r.get("error"),
               follower=(r.get("attach") or {}).get("follower_check", {}).get("unevaluated_bone_vertices"))
@@ -309,14 +311,16 @@ def t_intake2():
     if not fab:
         check("intake.variant", False, error="no skeletal mesh under /Game/Fab")
         return
-    r = J(wd.make_garment_variant(fab[0], f"{TEST}/Wardrobe", "VariantTest", "", 1024))
+    r = J(vmh_wardrobe.run_json("make_garment_variant", json.dumps(dict(
+        source_mesh=fab[0], dst_folder=f"{TEST}/Wardrobe", name="VariantTest", texture_variant="", max_texture_size=1024))))
     check("intake.variant", r.get("success") and all(not m["pack_textures_left"] for m in r.get("materials", [])) if r.get("success") else False,
           source=fab[0], result=r)
     nodes, _ = garments(BP)
     out = f"{TEST}/SKM_TransferTest_{RUN}"
     if EAL.does_asset_exist(out):
         EAL.delete_asset(out)
-    t = J(wd.transfer_skin_weights(r.get("mesh", fab[0]), body_mesh(nodes), out, "closest"))
+    t = J(vmh_wardrobe.run_json("transfer_skin_weights", json.dumps(dict(
+        target_mesh=r.get("mesh", fab[0]), source_mesh=body_mesh(nodes), out_path=out, method="closest"))))
     check("intake.transfer", t.get("success"), result=t)
 
 

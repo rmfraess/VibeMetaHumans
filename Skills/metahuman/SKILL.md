@@ -29,16 +29,11 @@ paths (`/Game/MetaHumans/MH_Hero`) or object paths.
 
 ## Start every MetaHuman session here
 
-```python
-import json, unreal
-s = json.loads(unreal.MetaHumanSetupService.get_status())
-```
-
-- `plugins` must show `MetaHumanCharacter`, `MetaHuman`, `MetaHumanLiveLink`, `LiveLink`, `Takes` and
-  `CaptureManagerEditor` as `enabled`. If not, stop and tell the user which plugin to enable
+- The `MetaHumanCharacter`, `MetaHuman`, `MetaHumanLiveLink`, `LiveLink`, `Takes` and
+  `CaptureManagerEditor` plugins must be enabled. If not, stop and tell the user which plugin to enable
   (it needs an editor restart).
-- `optional_content_installed == false` means the "MetaHuman Creator Core Data" launcher option is
-  missing: no presets, no wardrobe library, no texture synthesis. Characters can still be created
+- When the "MetaHuman Creator Core Data" launcher option is
+  missing there are no presets, no wardrobe library, no texture synthesis. Characters can still be created
   from the blank template and Animator / Live Link work normally. Tell the user; do not try to
   work around it.
 - Cloud steps (character auto-rig `request_auto_rigging` and `request_texture_sources` on the native subsystem, identity auto-rig) need the editor to
@@ -70,20 +65,19 @@ s = json.loads(unreal.MetaHumanSetupService.get_status())
    asynchronous; `build_async` queues a build. Check the result or status before continuing or retrying.
 5. **Commit settings structs.** Read the relevant character settings struct, modify its copy, then
    call the matching native subsystem commit function. Inspect shapes with
-   `MetaHumanObjectService.describe_struct`; read values from the character's reflected settings properties.
+   `get_symbol(name='unreal.MetaHumanCharacterEyesSettings')` (or the matching struct); read values from the character's reflected settings properties.
 6. **Keep the user's content layout.** Default output folders are `/Game/MetaHumans` (characters,
    builds) and `/Game/MHA` (capture data, identities, performances); follow the project's own
    convention when one exists.
 
-## MetaHumanObjectService (escape hatch)
+## Reflection escape hatch (engine API)
 
 ```python
-o = unreal.MetaHumanObjectService
 # Native ObjectToolset.GetProperties and SetProperties: inspect schema before calling.
 # SetProperties does not run PostEditChangeProperty; prefer the relevant native setter/commit.
-o.list_functions("MetaHumanCharacterEditorSubsystem", "Commit")
-o.call_object_function(subject_settings_path, "SetSmoothing", '{"0": "/MetaHumanLiveLink/..."}')  # positional args by index
-o.describe_struct("MetaHumanCharacterEyesSettings")
+[n for n in dir(unreal.MetaHumanCharacterEditorSubsystem) if "commit" in n]   # or get_symbol(name="unreal.MetaHumanCharacterEditorSubsystem")
+settings = unreal.MetaHumanLocalLiveLinkSourceBlueprint.get_subject_settings(key); settings.set_smoothing(asset)
+# struct shape: get_symbol(name="unreal.MetaHumanCharacterEyesSettings")
 ```
 
 Enum values are passed by name (`"Cinematic"`, `"JointsOnly"`, `"MonoFootage"`); object properties by

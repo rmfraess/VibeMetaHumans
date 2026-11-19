@@ -5,7 +5,6 @@ Usage from the engine's execute_python MCP tool or any editor Python:
 
     import unreal, vibemetahumans as vmh
 
-    print(vmh.status())                       # plugins, optional content, cloud login, counts
     for name in vmh.list_toolsets(): print(name)
     print(vmh.describe("VibeMetaHumans.MetaHumanCharacterService"))
 
@@ -57,14 +56,6 @@ def describe(toolset_name):
         if isinstance(item, dict) and item.get("name") == toolset_name:
             return item
     return None
-
-
-def status():
-    """One-call environment summary: which MetaHuman pieces are usable right now."""
-    svc = getattr(unreal, "MetaHumanSetupService", None)
-    if svc is None:
-        return {"error": "VibeMetaHumans is not loaded (enable the plugin and restart the editor)."}
-    return _decode(svc.get_status())
 
 
 def find_characters(search_root="/Game"):

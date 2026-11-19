@@ -17,16 +17,15 @@
  *  - Audio: a SoundWave asset - no footage, no identity.
  * Footage ingest, processing (MetaHumanAnimatorPerformanceTools.ProcessPerformance, async) and
  * animation export (MetaHumanAnimatorExportTools.ExportPerformanceAnimationSequence) are Epic's own
- * AI tools, as are cancelling and the Level Sequence export; this service creates and configures the
- * Performance and reports status.
+ * AI tools, as are cancelling and the Level Sequence export; this service adds the post-processing helpers.
  *
  * Python Usage:
  *   svc = unreal.MetaHumanAnimatorService
  *   # cd = (await call_tool("CaptureManagerToolset.CaptureManagerIngestTools.IngestMonoVideo", videoFilePath=..., audioFilePath="", slate="line01", takeNumber=1))["captureDataAssetPath"]
- *   p  = json.loads(svc.create_performance("/Game/MHA", "Perf_line01", "MonoFootage", cd, "", ""))["performance"]
- *   # await call_tool("MetaHumanAnimatorToolset.MetaHumanAnimatorPerformanceTools.ProcessPerformance", performance=p, params={})
+ *   # InspectFootageForPerformance(Footage=cd) gives Views[].Index and FrameRange, then:
+ *   # await call_tool("MetaHumanAnimatorToolset.MetaHumanAnimatorPerformanceTools.GenerateAnimationFromFootage", Footage=cd, Params={"InputType": "MonoFootage", "CameraIndex": 0, "ProcessingFrameRange": <FrameRange>}, OutputLocation={"AssetPath": "/Game/MHA", "AssetName": "Perf_line01"})
  *   # audio only:
- *   p = json.loads(svc.create_performance("/Game/MHA", "Perf_vo01", "Audio", "", "", "/Game/Audio/vo01"))["performance"]
+ *   # await call_tool("MetaHumanAnimatorToolset.MetaHumanAnimatorPerformanceTools.GenerateAnimationFromAudio", Audio=<SoundWave refPath>, Params={}, OutputLocation={"AssetPath": "/Game/MHA", "AssetName": "Perf_vo01"})
  *   # mood / output controls / head movement: EditorToolset.ObjectToolset.SetProperties on the Performance
  */
 UCLASS(BlueprintType)
@@ -35,28 +34,7 @@ class VIBEMETAHUMANS_API UMetaHumanAnimatorService : public UToolsetDefinition
 	GENERATED_BODY()
 
 public:
-	// =================================================================
-	// Performance
-	// =================================================================
 
-	/**
-	 * Create a MetaHuman Performance asset. InputType: MonoFootage | DepthFootage | Audio.
-	 * CaptureDataPath for footage routes; IdentityPath required for DepthFootage; AudioPath (SoundWave) for Audio.
-	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Animator")
-	static FString CreatePerformance(const FString& PackagePath, const FString& AssetName, const FString& InputType, const FString& CaptureDataPath, const FString& IdentityPath, const FString& AudioPath);
-
-	/**
-	 * Patch any performance property (JSON by property name): HeadMovementMode, SolveType, bSkipDiagnostics,
-	 * bHeadStabilization, StartFrameToProcess/EndFrameToProcess, FocalLength, UserExcludedFrames, ...
-	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Animator")
-	static FString ConfigurePerformance(const FString& PerformancePath, const FString& JsonPatch);
-
-
-	/** Status JSON: input type, inputs, can_process, is_processing, processed_frames, can_export, diagnostics. */
-	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Read"), Category = "VibeMetaHumans|Animator")
-	static FString GetStatus(const FString& PerformancePath);
 
 	// =================================================================
 	// Face clips in a game (2026-11-14, from shipping six MetaHumans with baked lip sync)

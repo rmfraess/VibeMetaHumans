@@ -19,7 +19,7 @@ It covers the four workflows of the in-editor MetaHuman pipeline:
 | Create & edit a character (MetaHuman Creator) | `MetaHumanCharacterService` + native Creator tools | character creation, body and face editing, settings, rigging, wardrobe, asynchronous build and deferred save; see `metahuman-creator` |
 | **Custom mesh to MetaHuman** | `MetaHumanCharacterService` + Creator subsystem | custom mesh conform, posed DNA export, A-pose commit, DCC round trips and Blueprint accessories |
 | **Hair on a built MetaHuman** | `MetaHumanCharacterService` | add or import grooms; discover wardrobe assets with the native Asset toolset |
-| **Dress a built MetaHuman** (2026-11-12, extended 2026-11-14) | `MetaHumanWardrobeService` | marketplace/Fab skeletal garments on a built Blueprint without a rebuild: `make_garment_variant` (pack garment copied with its own material and capped textures), `transfer_skin_weights` (weights onto a root-only Chaos render mesh), `describe_skeletal_mesh` (LODs, bones per LOD, sections, follower check), `fix_unevaluated_bone_weights` (cuff spikes and LOD streaks: every garment LOD against every body LOD it is drawn at), `make_full_body_from_dna` (the built body's missing skin back), `push_body_under_garments` (skin under a dress moved inward, nothing deleted), `hide_body_under_garments` (skin under closed garments deleted), `trim_inner_garment` (a shirt under a jacket), `push_garment_out_of_mesh` (a neckline out over the face mesh's neck skirt), `dump_runtime_poses` / `dump_actor_pose` (poses with the post-process correctives, as the game plays them), `measure_poke_through`, `capture_fit_views` (PNG views of the posed character from a private preview world: no level, no PIE), `add_skinned_accessory`, `snapshot_blueprint_components` / `restore_blueprint_components` (survive a rebuild, explicit clears kept; also `build(..., True)`), `post_build_fixup` (groom LODs, brow opacity, texture caps, Face anim class), `audit_placed_instances` (per-instance overrides on placed actors), `fill_groom_lods` |
+| **Dress a built MetaHuman** (2026-11-12, extended 2026-11-14) | `MetaHumanWardrobeService` | marketplace/Fab skeletal garments on a built Blueprint without a rebuild: `vmh_wardrobe.make_garment_variant` (pack garment copied with its own material and capped textures), `vmh_wardrobe.transfer_skin_weights` (weights onto a root-only Chaos render mesh), `describe_skeletal_mesh` (LODs, bones per LOD, sections, follower check), `fix_unevaluated_bone_weights` (cuff spikes and LOD streaks: every garment LOD against every body LOD it is drawn at), `make_full_body_from_dna` (the built body's missing skin back), `push_body_under_garments` (skin under a dress moved inward, nothing deleted), `hide_body_under_garments` (skin under closed garments deleted), `trim_inner_garment` (a shirt under a jacket), `push_garment_out_of_mesh` (a neckline out over the face mesh's neck skirt), `dump_runtime_poses` / `dump_actor_pose` (poses with the post-process correctives, as the game plays them), `measure_poke_through`, `capture_fit_views` (PNG views of the posed character from a private preview world: no level, no PIE), `vmh_wardrobe.add_skinned_accessory`, `snapshot_blueprint_components` / `restore_blueprint_components` (survive a rebuild, explicit clears kept; also `build(..., True)`), `post_build_fixup` (groom LODs, brow opacity, texture caps, Face anim class), `audit_placed_instances` (per-instance overrides on placed actors), `fill_groom_lods` |
 | Facial animation from **webcam / DSLR video** | `MetaHumanAnimatorService` | ingest a video file → Footage Capture Data → MonoFootage Performance → process → AnimSequence / LevelSequence |
 | Facial animation from an **iPhone** (Live Link Face) | `MetaHumanIdentityService` + `MetaHumanAnimatorService` | ingest the take, build and auto-rig an Identity from a neutral frame, process a DepthFootage Performance |
 | Facial animation from **audio only** | `MetaHumanAnimatorService` | SoundWave → Audio Performance with mood controls → process → export |
@@ -32,8 +32,7 @@ Every Vibe service tool returns a JSON string: `{"success": true, ...}` or
 
 > **Optional content.** MetaHuman Creator needs the **"MetaHuman Creator Core Data"** install
 > option from the Epic Games Launcher (Library → Unreal Engine 5.9 → Options). Without it there are
-> no presets, no texture synthesis and no wardrobe library; `get_status()` reports
-> `optional_content_installed`. Cloud steps (auto-rig, high-resolution textures) need an Epic account
+> no presets, no texture synthesis and no wardrobe library. Cloud steps (auto-rig, high-resolution textures) need an Epic account
 > signed in to the MetaHuman service.
 
 ---
@@ -52,8 +51,7 @@ Every Vibe service tool returns a JSON string: `{"success": true, ...}` or
    project's `.uproject`, and build the editor target (in Proteus: `BuildAndLaunchGame.ps1`, which is
    also copied here). The plugin is `EnabledByDefault: false` so an unbuilt checkout never
    triggers the "missing modules" dialog.
-4. Verify in the editor console: `VibeMetaHumans.ListToolsets` (expect 7 toolsets) and from the
-   agent: `unreal.MetaHumanSetupService.get_status()`.
+4. Verify in the editor console: `VibeMetaHumans.ListToolsets` (expect 7 toolsets).
 
 Skill packs under `Skills/` are discovered natively by UE 5.9 (`<Plugin>/Skills/**/SKILL.md`) and
 served through `ToolsetRegistry.AgentSkillToolset` → `ListSkills` / `GetSkills` as
@@ -70,9 +68,9 @@ calling an engine tool: its arguments and results differ from the former service
 
 ```python
 import json, unreal, vibeue
-setup, mh = unreal.MetaHumanSetupService, unreal.MetaHumanCharacterService
-print(json.loads(setup.get_status()))
-c = json.loads(mh.create_character("/Game/MetaHumans", "MH_Hero", ""))["character"]
+mh = unreal.MetaHumanCharacterService
+c = "/Game/MetaHumans/MH_Hero"
+await call_tool("metahuman_toolset.metahuman.MetaHumanToolset.create", asset_path=c)
 # Add the character for native edits and release it when done; see metahuman-creator.
 # After rigging and downloading textures, build synchronously:
 b = json.loads(mh.build(c, "Cinematic", "Cinematic", "/Game/MetaHumans", ""))
@@ -84,7 +82,7 @@ Ingest and processing are asynchronous in the native toolsets; wait for completi
 result before using the capture data or exporting. Native edits need an edit session and native
 settings structs, not the old JSON-patch wrapper. Use deferred save and check its final status.
 
-Through the MCP endpoint the same tools appear as `VibeMetaHumans.MetaHumanCharacterService.CreateCharacter`
+Through the MCP endpoint the same tools appear as `VibeMetaHumans.MetaHumanCharacterService.Build`
 etc. (`list_toolsets` / `describe_tools` / `call_tool`).
 
 ---
@@ -114,10 +112,9 @@ Design notes:
 
 - Services only call APIs the MetaHuman plugins export. Where a Blueprint library lives in a
   private header (Capture Manager ingest, Take Recorder's Live Link source) the service goes through
-  reflection (`VmhJson::CallStaticFunction` / `CallObjectFunction`), which is also what
-  `MetaHumanObjectService.call_function` exposes to agents.
+  reflection (`VmhJson::CallStaticFunction` / `CallObjectFunction`).
 - Native Creator settings edits read a settings struct, modify the copy, then commit it through the
-  character editor subsystem. Use `MetaHumanObjectService.describe_struct("MetaHumanCharacterEyesSettings")` to inspect a shape.
+  character editor subsystem. Use `get_symbol(name='unreal.MetaHumanCharacterEyesSettings')` to inspect a shape.
 - Long operations can outlive a request. Check their status or async result before continuing or retrying.
 - Nothing here needs the VibeUE plugin. The engine's own `execute_python` MCP tool is the easiest
   way to drive these services, and `SceneCaptureToolset.CaptureActiveEditorView` (or

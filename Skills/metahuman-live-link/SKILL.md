@@ -46,7 +46,9 @@ means the device went away.
 With the performer relaxed and facing the camera, call `capture_neutrals` on the native
 `unreal.MetaHumanLiveLinkSubjectSettings` object. For video subject settings, use
 `unreal.MetaHumanVideoBaseLiveLinkSubjectSettings.set_head_orientation` and the corresponding
-translation control. The remaining `subject_settings(subject, json_patch)` exposes other settings.
+translation control. Other settings: `keys = [k for k in unreal.LiveLinkBlueprintLibrary.get_live_link_subjects(True, True) if str(k.subject_name) == "Webcam"]`,
+`s = unreal.MetaHumanLocalLiveLinkSourceBlueprint.get_subject_settings(keys[0])`, then `s.set_editor_property(...)` or
+`EditorToolset.ObjectToolset.SetProperties` with `s.get_path_name()`.
 Inspect native method signatures before calling; the former service accepted different arguments.
 
 ## Bind to a character
@@ -65,9 +67,14 @@ MetaHuman Blueprint (the Creator preview actor does not take Live Link); build t
 ## Record
 
 ```python
-ll.start_take_recording(["Webcam"])     # opens Take Recorder, adds a Live Link source per subject, starts
-...
 panel = unreal.TakeRecorderBlueprintLibrary.open_take_recorder_panel()
+assert not unreal.TakeRecorderBlueprintLibrary.is_recording()
+for s in ["Webcam"]:   # one Live Link source per subject
+    src = panel.get_sources().add_source(unreal.TakeRecorderLiveLinkSource); src.set_editor_property("subject_name", s)
+err = panel.can_start_recording()
+if err: raise RuntimeError(str(err))
+panel.start_recording()
+...
 panel.stop_recording()
 print(unreal.TakeRecorderBlueprintLibrary.is_recording())
 ```

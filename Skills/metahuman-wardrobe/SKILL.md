@@ -33,7 +33,7 @@ keywords:
 # Dressing a built MetaHuman (wardrobe)
 
 ```python
-import json, unreal
+import json, unreal, vmh_wardrobe as vw
 mh, wd = unreal.MetaHumanCharacterService, unreal.MetaHumanWardrobeService
 BP, BODY = "/Game/MetaHumans/Vale/BP_Vale", "/Game/MetaHumans/Vale/Body/SKM_MH_Vale_BodyMesh"
 SEATED = "/Game/Anims/A_Idle_Seated"
@@ -49,8 +49,8 @@ says so: save what it reports by name.
 
 | Step | Method | Notes |
 |---|---|---|
-| Copy a pack garment, material variant, 1K textures | `wd.make_garment_variant(src, folder, name, variant, 1024)` | reports pack textures still referenced |
-| Weights onto a root-only Chaos render mesh | `wd.transfer_skin_weights(target, skinned_source, out, "closest")` | new mesh with the source's skeleton |
+| Copy a pack garment, material variant, 1K textures | `vw.make_garment_variant(src, folder, name, variant, 1024)` | reports pack textures still referenced |
+| Weights onto a root-only Chaos render mesh | `vw.transfer_skin_weights(target, skinned_source, out, "closest")` | new mesh with the source's skeleton |
 | Look at a mesh's LODs, bones, sections, slots | `wd.describe_skeletal_mesh(mesh, BODY)` | per LOD: bones not evaluated, follower check |
 | Cuff spikes and LOD streaks | `wd.fix_unevaluated_bone_weights(copy, BODY, dry)` | every garment LOD against every body LOD it is drawn at |
 | Attach | `mh.attach_skeletal_mesh_to_blueprint(BP, "G_X", copy, "Body", True, material)` | leader pose + leader bounds; read `follower_check` |
@@ -61,13 +61,13 @@ says so: save what it reports by name.
 | Poses the game shows | `wd.dump_runtime_poses(BP, poses)` / `wd.dump_actor_pose(label)` (PIE) | feed `{"poses":[{"file": f}]}` to every fit tool |
 | Did anything poke through? | `wd.measure_poke_through(BP, garments, opts)` | worst cm per garment and pose |
 | Look at it | `wd.capture_fit_views(BP, clip, t, views, out_dir, opts)` | PNGs, no level change, no PIE |
-| Accessory that follows the cloth | `wd.add_skinned_accessory(BP, static_mesh, "ACC_X", mode, surfaces, bone, rel)` | `surface` or `rigid` |
+| Accessory that follows the cloth | `vw.add_skinned_accessory(BP, static_mesh, "ACC_X", mode, surfaces, bone, rel)` | `surface` or `rigid` |
 | Rebuild the character | `mh.build(c, ..., True)` then `wd.post_build_fixup(BP, opts)` | then re-run the body fit |
 | Placed actors still wrong | `wd.audit_placed_instances(BP, clear, map)` | per-instance overrides vs a fresh spawn |
 | Bald LODs, vanishing brows | `wd.fill_groom_lods(groom, True, False)` | also part of `post_build_fixup` |
 
-`make_garment_variant`, `transfer_skin_weights` and `add_skinned_accessory` run `Content/Python/vmh_wardrobe.py`;
-the last two need the GeometryScripting plugin enabled (error `GEOMETRY_SCRIPT_MISSING` otherwise).
+`vw` is `Content/Python/vmh_wardrobe.py` (`make_garment_variant`, `transfer_skin_weights`, `add_skinned_accessory`;
+results are dicts, `vw.run_json(name, json_kwargs)` returns JSON); the last two need the GeometryScripting plugin enabled (error `GEOMETRY_SCRIPT_MISSING` otherwise).
 
 ## Pick the garment route
 
@@ -81,16 +81,16 @@ Skeletal garments (`*_Male_*` / `*_Female_*` meshes skinned to the MetaHuman bod
 A Chaos outfit made for a different body shape (it balloons as a leader-pose garment, collar over the face): give a
 THROWAWAY duplicate of the character the outfit, build it into a scratch folder, and use the baked
 `Clothing/<Name>_Outfits` mesh as a leader-pose garment on the real Blueprint (it is bound to that character's skeleton
-and fits). A render mesh skinned to `root` only gets weights with `transfer_skin_weights` first.
+and fits). A render mesh skinned to `root` only gets weights with `vw.transfer_skin_weights` first.
 
 ## Workflow
 
 ```python
 # 0. BEFORE the build that will show skin: no grey sports top baked into the body and the face's neck skirt
-s = c.get_editor_property("skin_settings"); s.skin.show_top_underwear = False   # check names with describe_struct
+s = c.get_editor_property("skin_settings"); s.skin.show_top_underwear = False   # check the struct's field names with get_symbol
 sub.commit_skin_settings(c, s)   # sub = MetaHumanCharacterEditorSubsystem; DISCARDS stored high-res textures; then build
 # 1. copies: mesh + material variant + 1K textures in your folder
-g = json.loads(wd.make_garment_variant("/Game/Fab/MetaHuman/Jacket_Female_01/Jacket_Female_01", "/Game/Wardrobe", "Jacket_Vale", "2", 1024))
+g = vw.make_garment_variant("/Game/Fab/MetaHuman/Jacket_Female_01/Jacket_Female_01", "/Game/Wardrobe", "Jacket_Vale", "2", 1024)
 JACKET = g["mesh"]
 # 2. what the garment and body look like per LOD; then move weights off bones the body does not evaluate
 print(json.loads(wd.describe_skeletal_mesh(JACKET, BODY))["lods"][-1]["as_follower"])
@@ -203,10 +203,10 @@ print(json.loads(wd.audit_placed_instances(BP, False, "/Game/Maps/L_Main")))   #
 |---|---|
 | On the head (glasses, earrings) | static mesh on the Face component's `head` socket (`attach_static_mesh_to_blueprint`), pivot at the bone origin, rotation undoing the bone's rest rotation (pitch -90) |
 | Round the neck (choker) | static mesh on Body's `neck_01` socket |
-| On cloth, stiff (brooch, pocket square) | `add_skinned_accessory(..., "rigid", '["G_Jacket"]', ...)`: one bone, no kinks, rides the lapel |
-| Hanging on cloth (chain, scarf) | `add_skinned_accessory(..., "surface", '["G_Shirt"]', ...)`: weights by closest point from the cloth |
+| On cloth, stiff (brooch, pocket square) | `vw.add_skinned_accessory(..., "rigid", ["G_Jacket"], ...)`: one bone, no kinks, rides the lapel |
+| Hanging on cloth (chain, scarf) | `vw.add_skinned_accessory(..., "surface", ["G_Shirt"], ...)`: weights by closest point from the cloth |
 
-`RelativeJson` places the static mesh exactly as it would sit on that bone's socket. The new mesh's weights are moved
+`relative` places the static mesh exactly as it would sit on that bone's socket. The new mesh's weights are moved
 off LOD-dropped bones and it is attached with leader pose. A piece along the body's centre line over an opening (a tie
 on an open collar) has no stable surface: three rounds of fixes in the jam and the owner had every tie removed. Check
 every accessory in the real close-up frame before building it (earrings hidden by hair, a pocket square below frame).

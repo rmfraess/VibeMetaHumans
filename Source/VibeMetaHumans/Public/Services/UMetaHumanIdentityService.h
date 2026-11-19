@@ -32,12 +32,5 @@ class VIBEMETAHUMANS_API UMetaHumanIdentityService : public UToolsetDefinition
 
 public:
 
-	/** Status JSON: logged_in, auto_rig_in_progress, tracking_in_progress, has_dna, has_predictive_solvers, conformal_rig_valid, poses/frames, body type, diagnostics. */
-	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Read"), Category = "VibeMetaHumans|Identity")
-	static FString GetStatus(const FString& IdentityPath);
 
-
-	/** Export the identity's DNA (and brows json) to files on disk. */
-	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Identity")
-	static FString ExportDna(const FString& IdentityPath, const FString& DnaOutPath, const FString& BrowsOutPath);
 };

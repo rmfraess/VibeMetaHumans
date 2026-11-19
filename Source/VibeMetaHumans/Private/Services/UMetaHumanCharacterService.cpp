@@ -434,59 +434,6 @@ namespace
 	}
 }
 
-// =====================================================================
-// Lifecycle
-// =====================================================================
-
-FString UMetaHumanCharacterService::CreateCharacter(const FString& PackagePath, const FString& AssetName, const FString& PresetCharacterPath)
-{
-	FString Error;
-	UMetaHumanCharacterEditorSubsystem* Subsystem = GetSubsystem(Error);
-	if (!Subsystem)
-	{
-		return VmhJson::Error(TEXT("NO_SUBSYSTEM"), Error);
-	}
-
-	UMetaHumanCharacter* Preset = nullptr;
-	if (!PresetCharacterPath.IsEmpty())
-	{
-		Preset = LoadCharacter(PresetCharacterPath, Error);
-		if (!Preset)
-		{
-			return VmhJson::Error(TEXT("PRESET_NOT_FOUND"), Error);
-		}
-	}
-
-	UObject* Created = VmhAssets::Create(PackagePath, AssetName, UMetaHumanCharacter::StaticClass(),
-		TEXT("/Script/MetaHumanCharacterEditor.MetaHumanCharacterFactoryNew"), Error);
-	UMetaHumanCharacter* Character = Cast<UMetaHumanCharacter>(Created);
-	if (!Character)
-	{
-		return VmhJson::Error(TEXT("CREATE_FAILED"), Error.IsEmpty() ? TEXT("Factory returned no MetaHumanCharacter") : Error);
-	}
-
-	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
-	if (Preset)
-	{
-		if (!Subsystem->IsObjectAddedForEditing(Character) && !Subsystem->TryAddObjectToEdit(Character))
-		{
-			return VmhJson::Error(TEXT("BEGIN_EDIT_FAILED"), TEXT("Created the asset but could not open it for editing to apply the preset"));
-		}
-		Subsystem->InitializeFromPreset(Character, Preset);
-		Out->SetStringField(TEXT("preset"), Preset->GetPathName());
-	}
-
-	if (!VmhAssets::Save(Character, Error))
-	{
-		UE_LOG(LogVibeMetaHumans, Warning, TEXT("%s"), *Error);
-	}
-
-	Out->SetStringField(TEXT("character"), Character->GetPathName());
-	Out->SetBoolField(TEXT("optional_content_installed"), FMetaHumanCharacterEditorModule::IsOptionalMetaHumanContentInstalled());
-	Out->SetStringField(TEXT("next"), TEXT("set_body_shape / set_skin_tone / set_settings, then request_auto_rig and build"));
-	return VmhJson::Ok(Out);
-}
-
 FString UMetaHumanCharacterService::GetSummary(const FString& CharacterPath)
 {
 	FEditContext Ctx = OpenForEdit(CharacterPath, false);

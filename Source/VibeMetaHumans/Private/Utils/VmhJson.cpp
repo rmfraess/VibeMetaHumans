@@ -453,7 +453,7 @@ namespace VmhJson
 		}
 		if (!Function->HasAnyFunctionFlags(FUNC_Static))
 		{
-			OutError = FString::Printf(TEXT("%s::%s is not static; use call_object_function / set_properties on an instance"), *Class->GetName(), *FunctionName.ToString());
+			OutError = FString::Printf(TEXT("%s::%s is not static; use EditorToolset.ObjectToolset.SetProperties or the object's own Python method on an instance"), *Class->GetName(), *FunctionName.ToString());
 			return false;
 		}
 		return CallFunctionInternal(Class->GetDefaultObject(), Function, Args, OutResult, OutError);

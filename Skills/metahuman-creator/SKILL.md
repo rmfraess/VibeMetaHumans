@@ -57,7 +57,8 @@ grooms under `/Game/MetaHumans/<Name>`.
 
 ## Workflow
 
-1. `create_character(package_path, name, preset_path)` — `preset_path` empty = blank template.
+1. Blank template: `await call_tool("metahuman_toolset.metahuman.MetaHumanToolset.create", asset_path="/Game/MetaHumans/MH_Hero")`.
+   From a preset or any existing character: `await call_tool("EditorToolset.AssetToolset.Duplicate", path="<preset asset>", newPath="/Game/MetaHumans/MH_Hero")`.
    Presets live in `/MetaHumanCharacter/Optional/Presets` (optional content) or can be any existing
    character; the new asset copies its state.
 2. Open for native edits: obtain `sub = unreal.get_editor_subsystem(unreal.MetaHumanCharacterEditorSubsystem)`
@@ -86,7 +87,7 @@ grooms under `/Game/MetaHumans/<Name>`.
    `character.skin_settings`, modify the copy and call `sub.commit_skin_settings(character, settings)`.
    Do likewise with eyes, makeup and head settings and their matching subsystem commit functions.
    For eyes, read `character.get_editor_property("eyes_settings")`, edit the struct and call
-   `sub.commit_eyes_settings(character, settings)`. `MetaHumanObjectService.describe_struct`
+   `sub.commit_eyes_settings(character, settings)`. `get_symbol(name='unreal.MetaHumanCharacterEyesSettings')`
    can help inspect shapes. Native commits use structs, not the former JSON patch.
 5. Wardrobe: acquire an edit session with `sub.try_add_object_to_edit(c)`, then `pc = sub.get_preview_collection(c)`.
    `pc.get_slot_names()` lists slots; `pc.get_default_instance().get_slot_selections()` lists current
@@ -366,7 +367,8 @@ clear of the body and the fingers apart, bald, no eyelashes, nothing worn above 
 with the character facing -Y lands facing +Y in Unreal.
 
 ```python
-c = json.loads(mh.create_character("/Game/MetaHumans", "MH_Dryad", ""))["character"]
+c = "/Game/MetaHumans/MH_Dryad"
+await call_tool("metahuman_toolset.metahuman.MetaHumanToolset.create", asset_path=c)
 r = json.loads(mh.import_from_custom_mesh(c, "/Game/Characters/Dryad/SM_Dryad_conform", "", True, True, 1024))
 #   -> solved, seconds, facing, height_cm, face_tracking {curves, points}, warnings (feet off the floor, metres, facing)
 #      1-3 minutes blocking for a 60k-vertex mesh; the character now holds the body in the MESH'S pose
@@ -437,8 +439,8 @@ Save with `save_deferred` and verify `get_save_status` before treating the asset
   are rejected afterwards; set body shape first.
 - Wardrobe item paths must be Wardrobe Item assets (`WI_*`), not groom or cloth assets directly
   (**Custom hair as a Creator wardrobe item** wraps a custom groom in one).
-- Without the optional content the built-in wardrobe items are unavailable and `create_character` with a
-  preset path fails with `PRESET_NOT_FOUND`; create from the blank template and say why.
+- Without the optional content the built-in wardrobe items are unavailable and duplicating a preset from
+  `/MetaHumanCharacter/Optional/Presets` fails; create from the blank template and say why.
 - A build can take a minute or more (texture bakes, groom bindings). Do not call it in a loop.
 - A REbuild regenerates `BP_<Name>`: components added since (garments, props, a speaker component) are dropped
   and edited properties reset (Body mesh, Face anim class, overrides, tags), and it rewrites the built meshes,

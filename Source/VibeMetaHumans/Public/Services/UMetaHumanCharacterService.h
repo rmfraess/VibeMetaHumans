@@ -33,16 +33,6 @@ class VIBEMETAHUMANS_API UMetaHumanCharacterService : public UToolsetDefinition
 	GENERATED_BODY()
 
 public:
-	// =================================================================
-	// Lifecycle
-	// =================================================================
-
-	/**
-	 * Create a MetaHuman Character asset. PresetCharacterPath may be empty (blank template) or point to a
-	 * preset / existing character to copy from (requires the optional content for Epic presets).
-	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Character")
-	static FString CreateCharacter(const FString& PackagePath, const FString& AssetName, const FString& PresetCharacterPath);
 
 	/** Summary JSON: rig state, DNA/texture flags, body type, skin/eye tone, active body constraints, wardrobe selections. */
 	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Read"), Category = "VibeMetaHumans|Character")

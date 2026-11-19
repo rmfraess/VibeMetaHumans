@@ -119,7 +119,7 @@ lives in the other packs: `metahuman-creator` (build), `metahuman-wardrobe` (clo
   should be Color" and the body falls back to the default material.
 - **Plugin and pack content rides along.** The default garments under `/MetaHumanCharacter/Optional/Clothing` (4K/8K)
   were 123.2 MB until texture-group caps of 1K took them to 20.7; groom atlases 28.1 to 13.9; teeth 11.5 to 3.6.
-  Marketplace garments are 4K: copy what you use and cap the copies (`make_garment_variant`), or the cook pulls the pack's
+  Marketplace garments are 4K: copy what you use and cap the copies (`vmh_wardrobe.make_garment_variant`), or the cook pulls the pack's
   material in through the mesh.
 - Set once, never during a cook: `r.GPUSkin.Support16BitBoneIndex=True` and `r.GPUSkin.UnlimitedBoneInfluences=True`
   (`[/Script/Engine.RendererSettings]`).

@@ -1,8 +1,8 @@
 """VibeMetaHumans wardrobe helpers that run on GeometryScript (2026-11-14, from the Dead Reel jam's one-off scripts).
 
-Called by the C++ tools MetaHumanWardrobeService.add_skinned_accessory / make_garment_variant / transfer_skin_weights
-(each returns this module's JSON); also usable directly in editor Python. Needs the GeometryScripting plugin enabled
-(the C++ tools report GEOMETRY_SCRIPT_MISSING otherwise). Every function writes NEW assets in /Game (never /Game/Fab)
+Run from editor Python: add_skinned_accessory / make_garment_variant / transfer_skin_weights return dicts,
+run_json(fn_name, kwargs_json) returns the same as JSON. Needs the GeometryScripting plugin enabled
+(run_json reports GEOMETRY_SCRIPT_MISSING otherwise). Every function writes NEW assets in /Game (never /Game/Fab)
 and saves nothing it did not create; results are JSON-able dicts with "success".
 """
 import json
@@ -328,7 +328,7 @@ def transfer_skin_weights(target_mesh, source_mesh, out_path="", method="closest
 
 
 def run_json(fn_name, kwargs_json):
-    """Entry point for the C++ tools: returns a JSON string, errors as {"success": false, ...}."""
+    """Entry point for JSON callers: returns a JSON string, errors as {"success": false, ...}."""
     try:
         return json.dumps(globals()[fn_name](**json.loads(kwargs_json)))
     except Exception as e:  # noqa: BLE001

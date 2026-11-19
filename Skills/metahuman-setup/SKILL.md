@@ -20,18 +20,24 @@ import json, unreal
 svc = unreal.MetaHumanSetupService
 ```
 
-## get_status()
+## Environment check
 
-Returns one JSON object. Fields that drive decisions:
+Run first in any MetaHuman session (inside `execute_python`):
 
-| Field | Meaning | If bad |
-|---|---|---|
-| `plugins.<Name>` | `enabled` / `disabled` / `missing` for every MetaHuman-related plugin | Ask the user to enable it in Edit → Plugins (or the `.uproject`) and restart; nothing else fixes this |
-| `optional_content_installed` | the "MetaHuman Creator Core Data" launcher option (`<Engine>/Plugins/MetaHuman/MetaHumanCharacter/Content/Optional`) | Presets, wardrobe items and texture synthesis are unavailable. Creator still works from the blank template; Animator and Live Link are unaffected. Tell the user how to install it (Epic Games Launcher → Library → Engine 5.8 → Options) |
-| `character_editor_subsystem` | MetaHuman Creator's editor subsystem exists | Creator plugin not loaded |
-| `texture_synthesis_enabled` | the texture-synthesis model loaded | needs the optional content |
-| `asset_counts` | characters, presets, identities, performances, capture data, wardrobe items, built MetaHuman Blueprints | zero presets with optional content installed means the asset registry has not scanned yet; call again |
-| `live_link_sources` / `live_link_subjects` | current Live Link state | – |
+```python
+plugins = await call_tool("PluginToolset.PluginToolset.ListEnabledPlugins")
+optional = unreal.MetaHumanGeneratorSubsystemWrapper.is_optional_content_installed()
+creator = unreal.get_editor_subsystem(unreal.MetaHumanCharacterEditorSubsystem) is not None
+```
+
+| Check | If bad |
+|---|---|
+| a MetaHuman plugin missing from `plugins` | Ask the user to enable it in Edit → Plugins (or the `.uproject`) and restart; nothing else fixes this |
+| `optional` is False ("MetaHuman Creator Core Data" launcher option) | Presets, wardrobe items and texture synthesis are unavailable. Creator still works from the blank template; Animator and Live Link are unaffected. Tell the user how to install it (Epic Games Launcher → Library → engine → Options) |
+| `creator` is False | Creator plugin not loaded |
+
+Asset counts come from `EditorToolset.AssetToolset.FindAssets` (below); zero presets with optional
+content installed means the asset registry has not scanned yet.
 
 ## Asset discovery
 
@@ -59,8 +65,7 @@ wants to look at a result; it is not needed for any scripted step.
 ## Typical opening sequence
 
 ```python
-s = json.loads(svc.get_status())
-assert s["plugins"]["MetaHumanCharacter"] == "enabled"
+assert "MetaHumanCharacter" in await call_tool("PluginToolset.PluginToolset.ListEnabledPlugins")
 import vibeue
 print(vibeue.get_toolset_schema("EditorToolset.AssetToolset"))  # FindAssets arguments
 ```

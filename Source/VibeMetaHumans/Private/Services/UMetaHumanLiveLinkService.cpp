@@ -45,49 +45,6 @@ namespace
 		return &IModularFeatures::Get().GetModularFeature<ILiveLinkClient>(ILiveLinkClient::ModularFeatureName);
 	}
 
-	const TCHAR* SubjectStateName(ELiveLinkSubjectState State)
-	{
-		switch (State)
-		{
-		case ELiveLinkSubjectState::Connected: return TEXT("Connected");
-		case ELiveLinkSubjectState::Unresponsive: return TEXT("Unresponsive");
-		case ELiveLinkSubjectState::Disconnected: return TEXT("Disconnected");
-		case ELiveLinkSubjectState::InvalidOrDisabled: return TEXT("InvalidOrDisabled");
-		case ELiveLinkSubjectState::Paused: return TEXT("Paused");
-		default: return TEXT("Unknown");
-		}
-	}
-
-	bool FindSubjectKey(ILiveLinkClient* Client, const FString& SubjectName, FLiveLinkSubjectKey& OutKey)
-	{
-		for (const FLiveLinkSubjectKey& Key : Client->GetSubjects(true, true))
-		{
-			if (Key.SubjectName.ToString().Equals(SubjectName, ESearchCase::IgnoreCase))
-			{
-				OutKey = Key;
-				return true;
-			}
-		}
-		return false;
-	}
-
-	TSharedPtr<FJsonObject> SubjectJson(ILiveLinkClient* Client, const FLiveLinkSubjectKey& Key)
-	{
-		TSharedPtr<FJsonObject> Out = VmhJson::Obj();
-		Out->SetStringField(TEXT("subject"), Key.SubjectName.ToString());
-		Out->SetStringField(TEXT("source"), Key.Source.ToString());
-		const TSubclassOf<ULiveLinkRole> Role = Client->GetSubjectRole_AnyThread(Key);
-		Out->SetStringField(TEXT("role"), Role ? Role->GetName() : TEXT(""));
-		Out->SetStringField(TEXT("state"), SubjectStateName(Client->GetSubjectState(Key.SubjectName)));
-		Out->SetBoolField(TEXT("enabled"), Client->IsSubjectEnabled(Key, false));
-		if (const UObject* Settings = Client->GetSubjectSettings(Key))
-		{
-			Out->SetStringField(TEXT("settings_class"), Settings->GetClass()->GetName());
-			Out->SetStringField(TEXT("settings_object"), Settings->GetPathName());
-		}
-		return Out;
-	}
-
 	TSharedPtr<FJsonObject> VideoFormatJson(const FMetaHumanLiveLinkVideoFormat& Format, int32 Index)
 	{
 		TSharedPtr<FJsonObject> Out = VmhJson::Obj();
@@ -139,21 +96,6 @@ namespace
 			}
 		}
 		return Best != INDEX_NONE ? Best : (Formats.Num() > 0 ? 0 : INDEX_NONE);
-	}
-
-	UObject* GetSubjectSettingsObject(ILiveLinkClient* Client, const FString& SubjectName, FLiveLinkSubjectKey& OutKey, FString& OutError)
-	{
-		if (!FindSubjectKey(Client, SubjectName, OutKey))
-		{
-			OutError = FString::Printf(TEXT("No Live Link subject named '%s' (see list_subjects)"), *SubjectName);
-			return nullptr;
-		}
-		UObject* Settings = Client->GetSubjectSettings(OutKey);
-		if (!Settings)
-		{
-			OutError = FString::Printf(TEXT("Subject '%s' has no settings object"), *SubjectName);
-		}
-		return Settings;
 	}
 }
 
@@ -332,40 +274,6 @@ FString UMetaHumanLiveLinkService::RemoveSource(const FString& SourceGuid)
 	return VmhJson::Ok(Out);
 }
 
-FString UMetaHumanLiveLinkService::SubjectSettings(const FString& SubjectName, const FString& JsonPatch)
-{
-	FString Error;
-	ILiveLinkClient* Client = GetClient(Error);
-	if (!Client)
-	{
-		return VmhJson::Error(TEXT("NO_LIVE_LINK"), Error);
-	}
-	FLiveLinkSubjectKey Key;
-	UObject* Settings = GetSubjectSettingsObject(Client, SubjectName, Key, Error);
-	if (!Settings)
-	{
-		return VmhJson::Error(TEXT("SUBJECT_NOT_FOUND"), Error);
-	}
-	TArray<FString> Changed;
-	if (!JsonPatch.TrimStartAndEnd().IsEmpty())
-	{
-		FString ParseError;
-		TSharedPtr<FJsonObject> Patch = VmhJson::Parse(JsonPatch, ParseError);
-		if (!Patch.IsValid())
-		{
-			return VmhJson::Error(TEXT("INVALID_JSON"), ParseError);
-		}
-		if (!VmhJson::PatchObject(Settings, Patch, Changed, Error))
-		{
-			return VmhJson::Error(TEXT("PATCH_FAILED"), Error);
-		}
-	}
-	TSharedPtr<FJsonObject> Out = SubjectJson(Client, Key);
-	Out->SetObjectField(TEXT("settings"), VmhJson::ObjectToJson(Settings, {}));
-	Out->SetArrayField(TEXT("changed"), VmhJson::StringArray(Changed));
-	return VmhJson::Ok(Out);
-}
-
 // =====================================================================
 // Binding and recording
 // =====================================================================
@@ -479,68 +387,5 @@ FString UMetaHumanLiveLinkService::BindSubjectToActor(const FString& ActorLabel,
 	}
 	Out->SetStringField(TEXT("hint"), TEXT("In the editor the pose updates live; in PIE/runtime make sure the Live Link source is still present and the face AnimBP is the Live Link one."));
 	return VmhJson::Ok(Out);
-}
-
-FString UMetaHumanLiveLinkService::StartTakeRecording(const TArray<FString>& SubjectNames)
-{
-#if WITH_VMH_TAKES
-	if (SubjectNames.Num() == 0)
-	{
-		return VmhJson::Error(TEXT("NO_SUBJECTS"), TEXT("Pass at least one Live Link subject name"));
-	}
-	if (UTakeRecorderBlueprintLibrary::IsRecording())
-	{
-		return VmhJson::Error(TEXT("ALREADY_RECORDING"), TEXT("Take Recorder is already recording; call stop_take_recording first"));
-	}
-	UTakeRecorderPanel* Panel = UTakeRecorderBlueprintLibrary::OpenTakeRecorderPanel();
-	if (!Panel)
-	{
-		return VmhJson::Error(TEXT("NO_PANEL"), TEXT("Could not open the Take Recorder panel"));
-	}
-	UTakeRecorderSources* Sources = Panel->GetSources();
-	if (!Sources)
-	{
-		return VmhJson::Error(TEXT("NO_SOURCES"), TEXT("Take Recorder panel has no sources object"));
-	}
-	UClass* LiveLinkSourceClass = VmhJson::FindClass(TEXT("/Script/LiveLinkSequencer.TakeRecorderLiveLinkSource"));
-	if (!LiveLinkSourceClass)
-	{
-		return VmhJson::Error(TEXT("NO_LIVE_LINK_RECORDER"), TEXT("TakeRecorderLiveLinkSource class not found (LiveLink plugin's LiveLinkSequencer module)"));
-	}
-
-	// Add one Live Link recorder source per subject (the panel keeps them for later takes).
-	TArray<FString> Added;
-	for (const FString& Subject : SubjectNames)
-	{
-		UTakeRecorderSource* Source = Sources->AddSource(LiveLinkSourceClass);
-		if (!Source)
-		{
-			continue;
-		}
-		if (FNameProperty* Prop = CastField<FNameProperty>(LiveLinkSourceClass->FindPropertyByName(TEXT("SubjectName"))))
-		{
-			Source->Modify();
-			Prop->SetPropertyValue_InContainer(Source, FName(*Subject));
-			FPropertyChangedEvent Event(Prop, EPropertyChangeType::ValueSet);
-			Source->PostEditChangeProperty(Event);
-		}
-		Added.Add(Subject);
-	}
-
-	FText CannotStart;
-	if (!Panel->CanStartRecording(CannotStart))
-	{
-		return VmhJson::Error(TEXT("CANNOT_START"), CannotStart.ToString());
-	}
-	Panel->StartRecording();
-
-	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
-	Out->SetArrayField(TEXT("subjects"), VmhJson::StringArray(SubjectNames));
-	Out->SetArrayField(TEXT("sources_added"), VmhJson::StringArray(Added));
-	Out->SetBoolField(TEXT("recording"), UTakeRecorderBlueprintLibrary::IsRecording());
-	return VmhJson::Ok(Out);
-#else
-	return VmhJson::Error(TEXT("TAKES_UNAVAILABLE"), TEXT("The Takes plugin was not present when VibeMetaHumans was built"));
-#endif
 }
 

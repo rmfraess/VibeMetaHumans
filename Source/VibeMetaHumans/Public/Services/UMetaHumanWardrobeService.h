@@ -30,8 +30,8 @@ class USkeletalMesh;
  *                                      record the Blueprint first and put it back after (build(..., preserve) does both);
  *                                      then post_build_fixup, and audit_placed_instances on the level.
  *   6. fill_groom_lods                - Optimized builds leave groom LODs with no geometry (bald at LOD4/LOD6).
- * Checks: describe_skeletal_mesh, measure_poke_through, capture_fit_views. Intake: make_garment_variant,
- * transfer_skin_weights. Accessories: add_skinned_accessory.
+ * Checks: describe_skeletal_mesh, measure_poke_through, capture_fit_views. Intake and accessories are Python helpers in
+ * Content/Python/vmh_wardrobe.py: make_garment_variant, transfer_skin_weights, add_skinned_accessory.
  *
  * Geometry is computed from asset data (reference skeletons, mesh descriptions). Poses: the rest pose always, plus the
  * listed ones - {"anim": path, "time"|"times"|"stride"} sampled on the asset ("evaluate":"asset": the body's post-process
@@ -215,43 +215,6 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Wardrobe")
 	static FString DumpActorPose(const FString& ActorLabel, const FString& ComponentName = TEXT("Body"), const FString& OutFilePath = TEXT(""), const FString& Label = TEXT(""), bool bAppend = true);
-
-	/**
-	 * A static accessory (tie, scarf, chain, brooch, pocket square) as a leader-pose SKINNED mesh under Body, so it follows
-	 * the surface under it instead of floating or kinking on one bone. The static mesh is placed like a static mesh on
-	 * Bone's socket with RelativeJson {"location":[x,y,z],"rotation":[roll,pitch,yaw],"scale":[x,y,z]} at Body's
-	 * reference pose; the new skeletal mesh (OutMeshPath, default <static mesh folder>/SKM_<name>_Skinned) carries the
-	 * body's skeleton. Mode "surface": weights by closest point from SurfaceComponentsJson as displayed at rest (the
-	 * garment it lies on; default ["Body"]); "rigid": all weight on the dominant bone under it (stiff pieces: no kinks).
-	 * Weights are then moved off bones the body drops at lower LODs, and the mesh is attached as ComponentName (leader
-	 * pose, leader bounds). Runs Content/Python/vmh_wardrobe.py on GeometryScript (the GeometryScripting plugin must be
-	 * enabled). Check it with capture_fit_views (focus "chest", seated and standing). Saves the new mesh only.
-	 * Jam lesson: a piece along the body's centre line over an opening (a tie on an open collar) has no stable surface.
-	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Wardrobe")
-	static FString AddSkinnedAccessory(const FString& BlueprintPath, const FString& StaticMeshPath, const FString& ComponentName, const FString& Mode = TEXT("surface"), const FString& SurfaceComponentsJson = TEXT("[\"Body\"]"), const FString& Bone = TEXT("spine_05"), const FString& RelativeJson = TEXT("{}"), const FString& OutMeshPath = TEXT(""));
-
-	/**
-	 * Garment intake: copy a marketplace garment into DestFolder as SKM_<Name> with its own material copies
-	 * (Materials/<material>_<Name>) and capped texture copies (Textures/, MaxTextureSize, virtual texture streaming
-	 * untouched), and point the mesh copy's slots at them, so the cook never pulls the pack's 4K material in through the
-	 * mesh. TextureVariant "2" swaps T_X_1_* (or T_X_*) for the pack's T_X_2_* colourway where it exists. Reports any pack
-	 * texture still referenced (a material instance copy keeps the pack parent's defaults). GeometryScript-free, but runs
-	 * in Content/Python/vmh_wardrobe.py.
-	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Wardrobe")
-	static FString MakeGarmentVariant(const FString& SourceMeshPath, const FString& DestFolder, const FString& Name, const FString& TextureVariant = TEXT(""), int32 MaxTextureSize = 1024);
-
-	/**
-	 * Garment intake: give a mesh with no usable skinning (a Chaos outfit's render mesh is skinned to root only and
-	 * cannot be a leader-pose garment) the bones and weights of a skinned source in the same space (the body or outfit it
-	 * was made on). Writes a NEW mesh (OutMeshPath, default <target>_Skinned) with the source's skeleton; Method
-	 * "closest" (closest point on the source surface) or "inpaint" (smooth fill). Then fix_unevaluated_bone_weights and
-	 * attach it. A Chaos outfit made for another body shape is refitted by a throwaway build instead (see the skill).
-	 * Runs Content/Python/vmh_wardrobe.py on GeometryScript.
-	 */
-	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Wardrobe")
-	static FString TransferSkinWeights(const FString& TargetMeshPath, const FString& SourceMeshPath, const FString& OutMeshPath = TEXT(""), const FString& Method = TEXT("closest"));
 
 	/**
 	 * Redo the asset-level fixes a Creator rebuild throws away, on one built Blueprint (after build(..., preserve)):
