@@ -5,7 +5,6 @@ description: Create and edit MetaHuman Character assets with unreal.MetaHumanCha
 vibeue_classes:
   - MetaHumanCharacterService
   - MetaHumanSetupService
-  - MetaHumanObjectService
 unreal_classes:
   - UMetaHumanCharacter
   - UMetaHumanCharacterEditorSubsystem
@@ -456,7 +455,7 @@ Save with `save_deferred` and verify `get_save_status` before treating the asset
 - A `SCS_BASE_COLOR` scene capture is written with alpha 0: it looks pure white in image viewers although the RGB
   is fine (drop the alpha before looking).
 - Preset skin texture indices are readable without opening an edit session:
-  `MetaHumanObjectService.get_properties(preset_path, ["SkinSettings"])`.
+  `EditorToolset.ObjectToolset.GetProperties` on the preset with `["SkinSettings"]`.
 - Clothes for a BUILT character (Fab skeletal garments, poke-through, necklines, rebuild survival) are the
   `metahuman-wardrobe` pack; `attach_skeletal_mesh_to_blueprint` now sets the leader's bounds and reports
   garment vertices weighted to bones the body does not evaluate (`follower_check`).

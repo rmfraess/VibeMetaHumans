@@ -4,7 +4,6 @@ display_name: MetaHuman Live Link (real-time face capture)
 description: Drive a MetaHuman's face live in the editor with unreal.MetaHumanLiveLinkService - add a MetaHuman Video source from a webcam, a MetaHuman Audio source from a microphone, or connect the Live Link Face app on an iPhone; calibrate neutrals, head tracking and smoothing; bind the subject to a placed MetaHuman actor (face AnimBP); record with Take Recorder. Use for "hook my webcam/phone up to the MetaHuman", "it is not moving", "record a take".
 vibeue_classes:
   - MetaHumanLiveLinkService
-  - MetaHumanObjectService
 unreal_classes:
   - UMetaHumanLocalLiveLinkSourceBlueprint
   - ULiveLinkFaceSourceBlueprint

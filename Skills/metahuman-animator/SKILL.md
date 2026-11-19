@@ -1,11 +1,9 @@
 ---
 name: metahuman-animator
 display_name: MetaHuman Animator (offline facial animation)
-description: Turn footage or audio into MetaHuman facial animation, and play it in a game (a face AnimBP with a slot, blinks added to baked clips), with unreal.MetaHumanAnimatorService and unreal.MetaHumanIdentityService - ingest a webcam/DSLR video, an iPhone Live Link Face take or a take archive into Footage Capture Data (Epic CaptureManagerToolset), build and auto-rig an Identity from a neutral frame (Mesh to MetaHuman), create MonoFootage / DepthFootage / Audio Performances, process (Epic ProcessPerformance) and export an AnimSequence (Epic) or LevelSequence onto a MetaHuman. Use for "animate the face from this video/phone take/voice line".
+description: Turn footage or audio into MetaHuman facial animation, and play it in a game (a face AnimBP with a slot, blinks added to baked clips), with unreal.MetaHumanAnimatorService - ingest a webcam/DSLR video, an iPhone Live Link Face take or a take archive into Footage Capture Data (Epic CaptureManagerToolset), build and auto-rig an Identity from a neutral frame (Mesh to MetaHuman), create MonoFootage / DepthFootage / Audio Performances, process (Epic ProcessPerformance) and export an AnimSequence (Epic) or LevelSequence onto a MetaHuman. Use for "animate the face from this video/phone take/voice line".
 vibeue_classes:
   - MetaHumanAnimatorService
-  - MetaHumanIdentityService
-  - MetaHumanObjectService
 unreal_classes:
   - UMetaHumanPerformance
   - UMetaHumanIdentity
@@ -30,7 +28,7 @@ keywords:
 
 ```python
 import json, unreal
-anim, ident = unreal.MetaHumanAnimatorService, unreal.MetaHumanIdentityService
+anim = unreal.MetaHumanAnimatorService
 # Epic AI tools (inside execute_python): await call_tool("<Toolset.Full.Name>.<Tool>", camelCaseParam=value)
 CM   = "CaptureManagerToolset.CaptureManagerIngestTools"
 PERF = "MetaHumanAnimatorToolset.MetaHumanAnimatorPerformanceTools"
