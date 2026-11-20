@@ -65,4 +65,27 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Animator")
 	static FString CreateFaceAnimBlueprint(const FString& PackagePath, const FString& AssetName = TEXT("ABP_Face_Slot"), const FString& SkeletonPath = TEXT(""), const FString& BlinkLoopAnimPath = TEXT(""), const FString& SlotName = TEXT("DefaultSlot"));
+public:
+	// Restored from upstream: the native replacement does not do all of this (cut audit).
+	/**
+	 * Patch any performance property (JSON by property name): HeadMovementMode, SolveType, bSkipDiagnostics,
+	 * bHeadStabilization, StartFrameToProcess/EndFrameToProcess, FocalLength, UserExcludedFrames, ...
+	 */
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Animator")
+	static FString ConfigurePerformance(const FString& PerformancePath, const FString& JsonPatch);
+
+	/**
+	 * Create a MetaHuman Performance asset. InputType: MonoFootage | DepthFootage | Audio.
+	 * CaptureDataPath for footage routes; IdentityPath required for DepthFootage; AudioPath (SoundWave) for Audio.
+	 */
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Animator")
+	static FString CreatePerformance(const FString& PackagePath, const FString& AssetName, const FString& InputType, const FString& CaptureDataPath, const FString& IdentityPath, const FString& AudioPath);
+
+	/**
+	 * Export to a Level Sequence. TargetMetaHumanBlueprintPath: an assembled MetaHuman Blueprint to drive (empty = identity
+	 * + camera only). Toggles for the identity, camera, audio and video tracks.
+	 */
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Animator")
+	static FString ExportLevelSequence(const FString& PerformancePath, const FString& PackagePath, const FString& AssetName, const FString& TargetMetaHumanBlueprintPath, bool bExportIdentity = false, bool bExportCamera = true, bool bExportAudio = true, bool bExportVideo = false);
+
 };

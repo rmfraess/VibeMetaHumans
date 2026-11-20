@@ -263,4 +263,55 @@ public:
 	 * HairWidthCm <= 0 to keep the file's own widths. Nothing is saved: save the groom in a LATER call. */
 	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Character")
 	static FString ImportGroom(const FString& AlembicPath, const FString& PackagePath, const FString& AssetName, bool bRigidBinding = true, float HairWidthCm = 0.013f, float TipScale = 0.6f);
+public:
+	// Restored from upstream: the native replacement does not do all of this (cut audit).
+	/**
+	 * Create a MetaHuman Character asset. PresetCharacterPath may be empty (blank template) or point to a
+	 * preset / existing character to copy from (requires the optional content for Epic presets).
+	 */
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Character")
+	static FString CreateCharacter(const FString& PackagePath, const FString& AssetName, const FString& PresetCharacterPath);
+
+	/** Face model (sculpt) landmarks: index -> [x,y,z] cm in the edit frame, plus likely_ears/likely_neck/likely_skull
+	 * indices guessed from their positions (the landmark SET differs per preset, so this is never a fixed index list). */
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Read"), Category = "VibeMetaHumans|Character")
+	static FString GetFaceLandmarks(const FString& CharacterPath);
+
+	/** Slots, the items available in the character's collection, and the current selection per slot. */
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Read"), Category = "VibeMetaHumans|Character")
+	static FString GetWardrobe(const FString& CharacterPath);
+
+	/** Download high-resolution skin texture sources from the MetaHuman service (resolutions from skin settings). Needs Epic login. */
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Execute"), Category = "VibeMetaHumans|Character")
+	static FString RequestTextureSources(const FString& CharacterPath, bool bBlocking = true);
+
+	/**
+	 * Set body constraints from JSON {"Height":182,"Fat":0.3,"Muscularity":0.7,"Masculine/Feminine":0.2,...}.
+	 * Height is in cm; other values are 0..1 normalised across the constraint's range unless bNormalized is
+	 * false (raw measurements). The named measurements become active; the others keep their active flag, unless
+	 * bOnlyNamed, which leaves only the named ones plus Height active (a neck widening that the other active
+	 * measurements blocked needs that). Commits the body, re-aligns the neck, and returns before/after/delta for
+	 * every measurement (a change to one moves others: Neck +4 cm raised Shoulder Height 1.4 cm).
+	 */
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Character")
+	static FString SetBodyConstraints(const FString& CharacterPath, const FString& ValuesJson, bool bNormalized = true, bool bOnlyNamed = false);
+
+	/** Set a texture parameter on a material instance constant (a built MetaHuman's MI_Body_Baked "Basecolor Baked", "Normal Baked", MI_Face_Skin_Baked_LOD3 ...) and update it. */
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Character")
+	static FString SetMaterialTexture(const FString& MaterialInstancePath, const FString& ParameterName, const FString& TexturePath);
+
+	/**
+	 * Patch a settings section from JSON (only the fields present change) and commit it. Use get_settings or
+	 * MetaHumanObjectService.describe_struct("MetaHumanCharacterSkinSettings") to see the shape.
+	 * Section: skin | eyes | makeup | head | face_evaluation | viewport.
+	 */
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Character")
+	static FString SetSettings(const FString& CharacterPath, const FString& Section, const FString& JsonPatch);
+
+public:
+	// Restored from upstream: the native replacement does not do all of this (cut audit).
+	/** Read a settings section as JSON. Section: skin | eyes | makeup | head | face_evaluation | viewport. */
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Read"), Category = "VibeMetaHumans|Character")
+	static FString GetSettings(const FString& CharacterPath, const FString& Section);
+
 };

@@ -25,7 +25,8 @@ It covers the four workflows of the in-editor MetaHuman pipeline:
 | Facial animation from **audio only** | `MetaHumanAnimatorService` | SoundWave → Audio Performance with mood controls → process → export |
 | **Real-time** face capture | `MetaHumanLiveLinkService` | webcam / microphone / Live Link Face sources, neutral calibration, head tracking, bind a subject to a placed MetaHuman, Take Recorder |
 | Environment & discovery | `MetaHumanSetupService` + native asset tools | plugin and optional-content status, enum options, asset discovery and editors |
-| Escape hatch | native Object toolset + `execute_python` | inspect or patch properties and call reflected functions |
+| Escape hatch | native Object toolset + `execute_python`; `MetaHumanObjectService` for hidden fields | inspect or patch properties and call reflected functions |
+| Identity from DNA or footage | `MetaHumanIdentityService` | collision-safe create, DNA and brows import, optional training, save |
 
 Every Vibe service tool returns a JSON string: `{"success": true, ...}` or
 `{"success": false, "error_code": "...", "error": "..."}`.

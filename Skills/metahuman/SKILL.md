@@ -48,7 +48,16 @@ paths (`/Game/MetaHumans/MH_Hero`) or object paths.
 | Facial animation from a video file (webcam/DSLR), an iPhone take, or audio; export AnimSequence/LevelSequence; a face AnimBP that plays clips; blinks | `/Skills/VibeMetaHumans/metahuman-animator` | `MetaHumanAnimatorService` (+ Epic `MetaHumanAnimatorIdentityTools` for iPhone depth takes) |
 | Real-time face capture in the editor, calibrate, bind to a placed MetaHuman, Take Recorder | `/Skills/VibeMetaHumans/metahuman-live-link` | `MetaHumanLiveLinkService` |
 | A MetaHuman going into a packaged game: face clips and blinks at run time, cook size, web/mobile look, LODs, shipping safety, pre-ship checks | `/Skills/VibeMetaHumans/metahuman-shipping` | (rules; tools in the wardrobe and animator packs) |
-| Anything not wrapped: read/patch properties, call a Blueprint library, describe a struct | (this pack, below) | Epic `ObjectToolset` + `execute_python` |
+| Anything not wrapped: read/patch properties, call a Blueprint library, describe a struct | (this pack, below) | Epic `ObjectToolset` + `execute_python`; `MetaHumanObjectService` `get_properties` / `set_properties` / `describe_struct` for hidden fields and unwrapped structs those cannot reach |
+| Build an Identity from a DNA file or footage (collision-safe, saved) | `/Skills/VibeMetaHumans/metahuman-animator` | `MetaHumanIdentityService` (`create_identity_from_dna`, `create_identity_from_footage`) |
+
+**Kept because the native path does less** (prefer these over a native recipe): Character
+`create_character` (initializes from a preset; C++-only natively), `get_face_landmarks` (ear/neck/skull
+classes), `get_wardrobe`, `request_texture_sources` (pending vs failed), `set_body_constraints`,
+`set_material_texture`, `get_settings` / `set_settings` (commits face evaluation and dirties the asset);
+Animator `create_performance`, `configure_performance`, `export_level_sequence` (no modal, saves);
+LiveLink `list_subjects`, `list_video_devices`, `subject_settings`; Setup `get_status`; plus the
+Identity and Object tools in the table above.
 
 ## Rules of thumb
 

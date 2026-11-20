@@ -2767,3 +2767,482 @@ FString UMetaHumanCharacterService::CaptureFaceForFit(const FString& CharacterPa
 	Out->SetStringField(TEXT("hint"), TEXT("measure the render and the reference photo with Content/Python/vmh_facefit/measure.py (MediaPipe, outside the editor), then fit.py <ref.json> <render.json> <meta> <png> <deltas.json> and move_face_landmarks with the deltas; capture again and repeat"));
 	return CharacterResult(Ctx, Out);
 }
+
+// Helpers restored with the tools below (cut audit).
+static TSharedPtr<FJsonObject> ConstraintsToJson(const TArray<FMetaHumanCharacterBodyConstraint>& Constraints)
+{
+	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
+	TArray<TSharedPtr<FJsonValue>> Items;
+	for (const FMetaHumanCharacterBodyConstraint& C : Constraints)
+	{
+		TSharedPtr<FJsonObject> Item = VmhJson::Obj();
+		Item->SetStringField(TEXT("name"), C.Name.ToString());
+		Item->SetBoolField(TEXT("active"), C.bIsActive);
+		Item->SetNumberField(TEXT("target"), C.TargetMeasurement);
+		Item->SetNumberField(TEXT("min"), C.MinMeasurement);
+		Item->SetNumberField(TEXT("max"), C.MaxMeasurement);
+		const float Range = C.MaxMeasurement - C.MinMeasurement;
+		Item->SetNumberField(TEXT("normalized"), Range > KINDA_SMALL_NUMBER ? (C.TargetMeasurement - C.MinMeasurement) / Range : 0.f);
+		Items.Add(MakeShared<FJsonValueObject>(Item));
+	}
+	Out->SetArrayField(TEXT("constraints"), Items);
+	return Out;
+}
+
+static TSharedPtr<FJsonObject> ItemKeyToJson(UMetaHumanCharacterPalette* Palette, const FMetaHumanPaletteItemKey& Key)
+{
+	TSharedPtr<FJsonObject> Out = VmhJson::StructToJson(FMetaHumanPaletteItemKey::StaticStruct(), &Key);
+	Out->SetStringField(TEXT("asset_name"), Key.ToAssetNameString());
+	Out->SetStringField(TEXT("slot"), UMetaHumanCollectionBlueprintLibrary::GetItemSlotName(Palette, Key).ToString());
+	Out->SetStringField(TEXT("display_name"), UMetaHumanCollectionBlueprintLibrary::GetItemDisplayName(Palette, Key).ToString());
+	return Out;
+}
+
+static ESection ParseSection(const FString& Section)
+{
+	const FString S = Section.TrimStartAndEnd().ToLower();
+	if (S == TEXT("skin")) return ESection::Skin;
+	if (S == TEXT("eyes")) return ESection::Eyes;
+	if (S == TEXT("makeup")) return ESection::Makeup;
+	if (S == TEXT("head") || S == TEXT("head_model") || S == TEXT("teeth") || S == TEXT("eyelashes")) return ESection::Head;
+	if (S == TEXT("face_evaluation") || S == TEXT("face")) return ESection::FaceEvaluation;
+	if (S == TEXT("viewport")) return ESection::Viewport;
+	return ESection::Unknown;
+}
+
+// Helpers restored with the tools below (cut audit).
+static const TCHAR* SectionProperty(ESection Section)
+{
+	switch (Section)
+	{
+	case ESection::Skin: return TEXT("SkinSettings");
+	case ESection::Eyes: return TEXT("EyesSettings");
+	case ESection::Makeup: return TEXT("MakeupSettings");
+	case ESection::Head: return TEXT("HeadModelSettings");
+	case ESection::FaceEvaluation: return TEXT("FaceEvaluationSettings");
+	case ESection::Viewport: return TEXT("ViewportSettings");
+	default: return TEXT("");
+	}
+}
+
+// Restored from upstream: the native replacement does not do all of this (cut audit).
+FString UMetaHumanCharacterService::CreateCharacter(const FString& PackagePath, const FString& AssetName, const FString& PresetCharacterPath)
+{
+	FString Error;
+	UMetaHumanCharacterEditorSubsystem* Subsystem = GetSubsystem(Error);
+	if (!Subsystem)
+	{
+		return VmhJson::Error(TEXT("NO_SUBSYSTEM"), Error);
+	}
+
+	UMetaHumanCharacter* Preset = nullptr;
+	if (!PresetCharacterPath.IsEmpty())
+	{
+		Preset = LoadCharacter(PresetCharacterPath, Error);
+		if (!Preset)
+		{
+			return VmhJson::Error(TEXT("PRESET_NOT_FOUND"), Error);
+		}
+	}
+
+	UObject* Created = VmhAssets::Create(PackagePath, AssetName, UMetaHumanCharacter::StaticClass(),
+		TEXT("/Script/MetaHumanCharacterEditor.MetaHumanCharacterFactoryNew"), Error);
+	UMetaHumanCharacter* Character = Cast<UMetaHumanCharacter>(Created);
+	if (!Character)
+	{
+		return VmhJson::Error(TEXT("CREATE_FAILED"), Error.IsEmpty() ? TEXT("Factory returned no MetaHumanCharacter") : Error);
+	}
+
+	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
+	if (Preset)
+	{
+		if (!Subsystem->IsObjectAddedForEditing(Character) && !Subsystem->TryAddObjectToEdit(Character))
+		{
+			return VmhJson::Error(TEXT("BEGIN_EDIT_FAILED"), TEXT("Created the asset but could not open it for editing to apply the preset"));
+		}
+		Subsystem->InitializeFromPreset(Character, Preset);
+		Out->SetStringField(TEXT("preset"), Preset->GetPathName());
+	}
+
+	if (!VmhAssets::Save(Character, Error))
+	{
+		UE_LOG(LogVibeMetaHumans, Warning, TEXT("%s"), *Error);
+	}
+
+	Out->SetStringField(TEXT("character"), Character->GetPathName());
+	Out->SetBoolField(TEXT("optional_content_installed"), FMetaHumanCharacterEditorModule::IsOptionalMetaHumanContentInstalled());
+	Out->SetStringField(TEXT("next"), TEXT("set_body_shape / set_skin_tone / set_settings, then request_auto_rig and build"));
+	return VmhJson::Ok(Out);
+}
+
+FString UMetaHumanCharacterService::GetFaceLandmarks(const FString& CharacterPath)
+{
+	FEditContext Ctx = OpenForEdit(CharacterPath, true);
+	if (!Ctx.IsValid())
+	{
+		return Ctx.ToError();
+	}
+	TArray<FVector> Landmarks;
+	Ctx.Subsystem->GetFaceLandmarks(Ctx.Character, Landmarks);
+	if (Landmarks.Num() == 0)
+	{
+		return VmhJson::Error(TEXT("NO_LANDMARKS"), TEXT("get_face_landmarks returned no points"));
+	}
+	TArray<int32> Ears, Neck, Skull;
+	ClassifyLandmarks(Landmarks, Ears, Neck, Skull);
+
+	TSharedPtr<FJsonObject> LandmarksJson = VmhJson::Obj();
+	for (int32 i = 0; i < Landmarks.Num(); ++i)
+	{
+		TArray<TSharedPtr<FJsonValue>> V;
+		V.Add(MakeShared<FJsonValueNumber>(Landmarks[i].X));
+		V.Add(MakeShared<FJsonValueNumber>(Landmarks[i].Y));
+		V.Add(MakeShared<FJsonValueNumber>(Landmarks[i].Z));
+		LandmarksJson->SetArrayField(FString::FromInt(i), V);
+	}
+	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
+	Out->SetNumberField(TEXT("count"), Landmarks.Num());
+	Out->SetObjectField(TEXT("landmarks"), LandmarksJson);
+	Out->SetStringField(TEXT("frame"), TEXT("edit frame, centimetres, +Y toward the face, +Z up"));
+	Out->SetArrayField(TEXT("likely_ears"), IntArray(Ears));
+	Out->SetArrayField(TEXT("likely_neck"), IntArray(Neck));
+	Out->SetArrayField(TEXT("likely_skull"), IntArray(Skull));
+	return CharacterResult(Ctx, Out);
+}
+
+FString UMetaHumanCharacterService::GetWardrobe(const FString& CharacterPath)
+{
+	FEditContext Ctx = OpenForEdit(CharacterPath, false);
+	if (!Ctx.IsValid())
+	{
+		return Ctx.ToError();
+	}
+	UMetaHumanCollection* Collection = LiveCollection(Ctx.Subsystem, Ctx.Character);
+	if (!Collection)
+	{
+		return VmhJson::Error(TEXT("NO_COLLECTION"), TEXT("Character has no internal collection"));
+	}
+	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
+	Out->SetBoolField(TEXT("from_edit_preview"), Collection != Ctx.Character->GetInternalCollection());
+	Out->SetArrayField(TEXT("slots"), VmhJson::NameArray(UMetaHumanCollectionBlueprintLibrary::GetSlotNames(Collection)));
+
+	TArray<TSharedPtr<FJsonValue>> Items;
+	for (const FMetaHumanPaletteItemKey& Key : UMetaHumanCollectionBlueprintLibrary::GetAllItemKeys(Collection))
+	{
+		Items.Add(MakeShared<FJsonValueObject>(ItemKeyToJson(Collection, Key)));
+	}
+	Out->SetArrayField(TEXT("items"), Items);
+
+	TArray<TSharedPtr<FJsonValue>> Selections;
+	for (const FMetaHumanPipelineSlotSelectionData& Data : Collection->GetMutableDefaultInstance()->GetSlotSelectionData())
+	{
+		TSharedPtr<FJsonObject> Item = VmhJson::Obj();
+		Item->SetStringField(TEXT("slot"), Data.Selection.SlotName.ToString());
+		Item->SetStringField(TEXT("item"), Data.Selection.SelectedItem.ToAssetNameString());
+		Selections.Add(MakeShared<FJsonValueObject>(Item));
+	}
+	Out->SetArrayField(TEXT("selections"), Selections);
+	Out->SetStringField(TEXT("character"), Ctx.Character->GetPathName());
+	return VmhJson::Ok(Out);
+}
+
+FString UMetaHumanCharacterService::RequestTextureSources(const FString& CharacterPath, bool bBlocking)
+{
+	FEditContext Ctx = OpenForEdit(CharacterPath, true);
+	if (!Ctx.IsValid())
+	{
+		return Ctx.ToError();
+	}
+	FMetaHumanCharacterTextureRequestParams Params;
+	Params.bBlocking = bBlocking;
+	Params.bReportProgress = !bBlocking;
+	Ctx.Subsystem->RequestTextureSources(Ctx.Character, Params);
+
+	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
+	Out->SetBoolField(TEXT("blocking"), bBlocking);
+	Out->SetBoolField(TEXT("requesting_high_res_textures"), Ctx.Subsystem->IsRequestingHighResolutionTextures(Ctx.Character));
+	Out->SetBoolField(TEXT("has_high_resolution_textures"), Ctx.Character->HasHighResolutionTextures());
+	return CharacterResult(Ctx, Out);
+}
+
+FString UMetaHumanCharacterService::SetBodyConstraints(const FString& CharacterPath, const FString& ValuesJson, bool bNormalized, bool bOnlyNamed)
+{
+	FString ParseError;
+	TSharedPtr<FJsonObject> Values = VmhJson::Parse(ValuesJson, ParseError);
+	if (!Values.IsValid())
+	{
+		return VmhJson::Error(TEXT("INVALID_JSON"), ParseError);
+	}
+	FEditContext Ctx = OpenForEdit(CharacterPath, true);
+	if (!Ctx.IsValid())
+	{
+		return Ctx.ToError();
+	}
+	if (IsFixedBodyType(Ctx.Character))
+	{
+		return VmhJson::Error(TEXT("FIXED_BODY"), TEXT("This character uses a fixed body type; call set_body_type(..., \"BlendableBody\") first to use parametric constraints"));
+	}
+
+	TArray<FMetaHumanCharacterBodyConstraint> Constraints = Ctx.Subsystem->GetBodyConstraints(Ctx.Character, false);
+	TMap<FString, float> Before;
+	for (const FMetaHumanCharacterBodyConstraint& C : Constraints) { Before.Add(C.Name.ToString(), C.TargetMeasurement); }
+
+	TArray<FString> Applied;
+	TArray<FString> Unknown;
+	TSet<FString> Named; // the measurements this call names, plus Height: only these end up active
+	for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : Values->Values)
+	{
+		FMetaHumanCharacterBodyConstraint* Found = Constraints.FindByPredicate([&Pair](const FMetaHumanCharacterBodyConstraint& C)
+		{
+			return C.Name.ToString().Equals(Pair.Key, ESearchCase::IgnoreCase);
+		});
+		if (!Found)
+		{
+			Unknown.Add(Pair.Key);
+			continue;
+		}
+		double Value = 0.0;
+		if (!Pair.Value->TryGetNumber(Value))
+		{
+			Unknown.Add(Pair.Key + TEXT(" (not a number)"));
+			continue;
+		}
+		Named.Add(Found->Name.ToString());
+		const bool bIsHeight = Found->Name.ToString().Equals(TEXT("Height"), ESearchCase::IgnoreCase);
+		if (bIsHeight || !bNormalized)
+		{
+			Found->TargetMeasurement = FMath::Clamp(static_cast<float>(Value), Found->MinMeasurement, Found->MaxMeasurement);
+		}
+		else
+		{
+			Found->TargetMeasurement = FMath::Lerp(Found->MinMeasurement, Found->MaxMeasurement, FMath::Clamp(static_cast<float>(Value), 0.f, 1.f));
+		}
+		Applied.Add(Found->Name.ToString());
+	}
+	if (Applied.Num() == 0)
+	{
+		TArray<FString> Names;
+		for (const FMetaHumanCharacterBodyConstraint& C : Constraints) Names.Add(C.Name.ToString());
+		return VmhJson::Error(TEXT("NO_MATCHING_CONSTRAINT"), FString::Printf(TEXT("None of the keys matched a body constraint. Available: %s"), *FString::Join(Names, TEXT(", "))));
+	}
+
+	// the named measurements become active; the others keep their flag (a call that only sets Height or the body shape
+	// must not switch off a Neck an earlier call set). bOnlyNamed leaves only the named ones plus Height active:
+	// pinning every constraint active blocked a neck change, Height + the named ones worked (MissionCommander r4/r5).
+	if (bOnlyNamed)
+	{
+		Named.Add(TEXT("Height"));
+	}
+	for (FMetaHumanCharacterBodyConstraint& C : Constraints)
+	{
+		if (Named.Contains(C.Name.ToString()))
+		{
+			C.bIsActive = true;
+		}
+		else if (bOnlyNamed)
+		{
+			C.bIsActive = false;
+		}
+	}
+
+	Ctx.Subsystem->SetBodyConstraints(Ctx.Character, Constraints);
+	Ctx.Subsystem->CommitBodyState(Ctx.Character);
+	ResetNeckToBody(Ctx.Subsystem, Ctx.Character);
+
+	// before/after/delta for EVERY measurement, read back from the committed state (a body change often moves more
+	// than the named ones as a side effect, e.g. Shoulder Height +1.4 cm from a neck-only edit, 2026-10-06).
+	const TArray<FMetaHumanCharacterBodyConstraint> After = Ctx.Subsystem->GetBodyConstraints(Ctx.Character, false);
+	TArray<TSharedPtr<FJsonValue>> MeasurementsJson;
+	for (const FMetaHumanCharacterBodyConstraint& C : After)
+	{
+		const FString Name = C.Name.ToString();
+		const float B = Before.Contains(Name) ? Before[Name] : C.TargetMeasurement;
+		TSharedPtr<FJsonObject> M = VmhJson::Obj();
+		M->SetStringField(TEXT("name"), Name);
+		M->SetBoolField(TEXT("active"), C.bIsActive);
+		M->SetNumberField(TEXT("before"), B);
+		M->SetNumberField(TEXT("after"), C.TargetMeasurement);
+		M->SetNumberField(TEXT("delta"), C.TargetMeasurement - B);
+		MeasurementsJson.Add(MakeShared<FJsonValueObject>(M));
+	}
+	TSharedPtr<FJsonObject> Out = ConstraintsToJson(After);
+	Out->SetArrayField(TEXT("measurements"), MeasurementsJson);
+	Out->SetArrayField(TEXT("applied"), VmhJson::StringArray(Applied));
+	Out->SetArrayField(TEXT("active_now"), VmhJson::StringArray(Named.Array()));
+	if (Unknown.Num() > 0)
+	{
+		Out->SetArrayField(TEXT("ignored"), VmhJson::StringArray(Unknown));
+	}
+	return CharacterResult(Ctx, Out);
+}
+
+FString UMetaHumanCharacterService::SetMaterialTexture(const FString& MaterialInstancePath, const FString& ParameterName, const FString& TexturePath)
+{
+	UMaterialInstanceConstant* Instance = VmhAssets::Load<UMaterialInstanceConstant>(MaterialInstancePath);
+	if (!Instance)
+	{
+		return VmhJson::Error(TEXT("MATERIAL_NOT_FOUND"), FString::Printf(TEXT("No material instance constant at %s"), *MaterialInstancePath));
+	}
+	UTexture* Texture = VmhAssets::Load<UTexture>(TexturePath);
+	if (!Texture)
+	{
+		return VmhJson::Error(TEXT("TEXTURE_NOT_FOUND"), FString::Printf(TEXT("No texture at %s"), *TexturePath));
+	}
+	TArray<FMaterialParameterInfo> Infos;
+	TArray<FGuid> Ids;
+	Instance->GetAllTextureParameterInfo(Infos, Ids);
+	TArray<FString> Names;
+	bool bKnown = false;
+	for (const FMaterialParameterInfo& Info : Infos)
+	{
+		Names.Add(Info.Name.ToString());
+		bKnown |= Info.Name == FName(*ParameterName);
+	}
+	if (!bKnown)
+	{
+		return VmhJson::Error(TEXT("NO_SUCH_PARAMETER"), FString::Printf(TEXT("%s has no texture parameter %s; it has: %s"), *MaterialInstancePath, *ParameterName, *FString::Join(Names, TEXT(", "))));
+	}
+	// a texture imported a moment ago is still compiling, and the editor library refuses it (2026-10-04)
+	FTextureCompilingManager::Get().FinishCompilation({ Texture });
+	const FName ParamName(*ParameterName);
+	const FMaterialParameterInfo Info{ ParamName };
+	const bool bSet = UMaterialEditingLibrary::SetMaterialInstanceTextureParameterValue(Instance, ParamName, Texture);
+	if (!bSet)
+	{
+		Instance->SetTextureParameterValueEditorOnly(Info, Texture);
+	}
+	UMaterialEditingLibrary::UpdateMaterialInstance(Instance);
+	Instance->MarkPackageDirty();
+	UTexture* ReadBack = nullptr;
+	Instance->GetTextureParameterValue(FHashedMaterialParameterInfo(Info), ReadBack);
+	const bool bApplied = ReadBack == Texture;
+	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
+	Out->SetStringField(TEXT("material_instance"), Instance->GetPathName());
+	Out->SetStringField(TEXT("parameter"), ParameterName);
+	Out->SetStringField(TEXT("texture"), Texture->GetPathName());
+	Out->SetBoolField(TEXT("set"), bApplied);
+	Out->SetStringField(TEXT("reads_back"), ReadBack ? ReadBack->GetPathName() : TEXT(""));
+	return bApplied ? VmhJson::Ok(Out) : VmhJson::Error(TEXT("SET_FAILED"), TEXT("the parameter does not read back as the texture after setting it"), Out);
+}
+
+FString UMetaHumanCharacterService::SetSettings(const FString& CharacterPath, const FString& Section, const FString& JsonPatch)
+{
+	const ESection S = ParseSection(Section);
+	if (S == ESection::Unknown)
+	{
+		return VmhJson::Error(TEXT("UNKNOWN_SECTION"), SectionError);
+	}
+	FString ParseError;
+	TSharedPtr<FJsonObject> Patch = VmhJson::Parse(JsonPatch, ParseError);
+	if (!Patch.IsValid())
+	{
+		return VmhJson::Error(TEXT("INVALID_JSON"), ParseError);
+	}
+	FEditContext Ctx = OpenForEdit(CharacterPath, true);
+	if (!Ctx.IsValid())
+	{
+		return Ctx.ToError();
+	}
+	UMetaHumanCharacter* Character = Ctx.Character;
+	FString Err;
+
+	switch (S)
+	{
+	case ESection::Skin:
+	{
+		FMetaHumanCharacterSkinSettings Value;
+		if (!ReadStruct(Character, TEXT("SkinSettings"), Value, Err) || !VmhJson::JsonToStruct(Patch, FMetaHumanCharacterSkinSettings::StaticStruct(), &Value, Err))
+		{
+			return VmhJson::Error(TEXT("PATCH_FAILED"), Err);
+		}
+		Ctx.Subsystem->CommitSkinSettings(Character, Value);
+		break;
+	}
+	case ESection::Eyes:
+	{
+		FMetaHumanCharacterEyesSettings Value;
+		if (!ReadStruct(Character, TEXT("EyesSettings"), Value, Err) || !VmhJson::JsonToStruct(Patch, FMetaHumanCharacterEyesSettings::StaticStruct(), &Value, Err))
+		{
+			return VmhJson::Error(TEXT("PATCH_FAILED"), Err);
+		}
+		Ctx.Subsystem->CommitEyesSettings(Character, Value);
+		break;
+	}
+	case ESection::Makeup:
+	{
+		FMetaHumanCharacterMakeupSettings Value;
+		if (!ReadStruct(Character, TEXT("MakeupSettings"), Value, Err) || !VmhJson::JsonToStruct(Patch, FMetaHumanCharacterMakeupSettings::StaticStruct(), &Value, Err))
+		{
+			return VmhJson::Error(TEXT("PATCH_FAILED"), Err);
+		}
+		Ctx.Subsystem->CommitMakeupSettings(Character, Value);
+		break;
+	}
+	case ESection::Head:
+	{
+		FMetaHumanCharacterHeadModelSettings Value;
+		if (!ReadStruct(Character, TEXT("HeadModelSettings"), Value, Err) || !VmhJson::JsonToStruct(Patch, FMetaHumanCharacterHeadModelSettings::StaticStruct(), &Value, Err))
+		{
+			return VmhJson::Error(TEXT("PATCH_FAILED"), Err);
+		}
+		Ctx.Subsystem->CommitHeadModelSettings(Character, Value);
+		break;
+	}
+	case ESection::FaceEvaluation:
+	{
+		FMetaHumanCharacterFaceEvaluationSettings Value;
+		if (!ReadStruct(Character, TEXT("FaceEvaluationSettings"), Value, Err) || !VmhJson::JsonToStruct(Patch, FMetaHumanCharacterFaceEvaluationSettings::StaticStruct(), &Value, Err))
+		{
+			return VmhJson::Error(TEXT("PATCH_FAILED"), Err);
+		}
+		Ctx.Subsystem->CommitFaceEvaluationSettings(Character, Value);
+		break;
+	}
+	case ESection::Viewport:
+	{
+		FStructProperty* Prop = CastField<FStructProperty>(Character->GetClass()->FindPropertyByName(TEXT("ViewportSettings")));
+		if (!Prop)
+		{
+			return VmhJson::Error(TEXT("NO_PROPERTY"), TEXT("Character has no ViewportSettings"));
+		}
+		Character->Modify();
+		if (!VmhJson::JsonToStruct(Patch, Prop->Struct, Prop->ContainerPtrToValuePtr<void>(Character), Err))
+		{
+			return VmhJson::Error(TEXT("PATCH_FAILED"), Err);
+		}
+		FPropertyChangedEvent Event(Prop, EPropertyChangeType::ValueSet);
+		Character->PostEditChangeProperty(Event);
+		break;
+	}
+	default:
+		break;
+	}
+
+	return GetSettings(CharacterPath, Section);
+}
+
+// Restored from upstream: the native replacement does not do all of this (cut audit).
+FString UMetaHumanCharacterService::GetSettings(const FString& CharacterPath, const FString& Section)
+{
+	const ESection S = ParseSection(Section);
+	if (S == ESection::Unknown)
+	{
+		return VmhJson::Error(TEXT("UNKNOWN_SECTION"), SectionError);
+	}
+	FEditContext Ctx = OpenForEdit(CharacterPath, false);
+	if (!Ctx.IsValid())
+	{
+		return Ctx.ToError();
+	}
+	FStructProperty* Prop = CastField<FStructProperty>(Ctx.Character->GetClass()->FindPropertyByName(SectionProperty(S)));
+	if (!Prop)
+	{
+		return VmhJson::Error(TEXT("NO_PROPERTY"), FString::Printf(TEXT("Character has no %s"), SectionProperty(S)));
+	}
+	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
+	Out->SetStringField(TEXT("character"), Ctx.Character->GetPathName());
+	Out->SetStringField(TEXT("section"), Section);
+	Out->SetStringField(TEXT("struct"), Prop->Struct->GetName());
+	Out->SetObjectField(TEXT("settings"), VmhJson::StructToJson(Prop->Struct, Prop->ContainerPtrToValuePtr<void>(Ctx.Character)));
+	return VmhJson::Ok(Out);
+}

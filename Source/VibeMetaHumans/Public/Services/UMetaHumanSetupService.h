@@ -31,4 +31,13 @@ public:
 	/** Names of the enum values an agent can pass to the other services (body types, rig types, pipeline types, quality, input types, moods...). */
 	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Read"), Category = "VibeMetaHumans|Setup")
 	static FString GetEnumOptions();
+public:
+	// Restored from upstream: the native replacement does not do all of this (cut audit).
+	/**
+	 * Environment summary as JSON: plugins (name -> enabled), optional_content_installed, editor subsystem
+	 * availability, preset/wardrobe folders, counts of MetaHuman assets in the project, Live Link source count.
+	 */
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Read"), Category = "VibeMetaHumans|Setup")
+	static FString GetStatus();
+
 };

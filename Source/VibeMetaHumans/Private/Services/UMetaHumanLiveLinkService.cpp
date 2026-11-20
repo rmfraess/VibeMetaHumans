@@ -45,6 +45,49 @@ namespace
 		return &IModularFeatures::Get().GetModularFeature<ILiveLinkClient>(ILiveLinkClient::ModularFeatureName);
 	}
 
+	const TCHAR* SubjectStateName(ELiveLinkSubjectState State)
+	{
+		switch (State)
+		{
+		case ELiveLinkSubjectState::Connected: return TEXT("Connected");
+		case ELiveLinkSubjectState::Unresponsive: return TEXT("Unresponsive");
+		case ELiveLinkSubjectState::Disconnected: return TEXT("Disconnected");
+		case ELiveLinkSubjectState::InvalidOrDisabled: return TEXT("InvalidOrDisabled");
+		case ELiveLinkSubjectState::Paused: return TEXT("Paused");
+		default: return TEXT("Unknown");
+		}
+	}
+
+	bool FindSubjectKey(ILiveLinkClient* Client, const FString& SubjectName, FLiveLinkSubjectKey& OutKey)
+	{
+		for (const FLiveLinkSubjectKey& Key : Client->GetSubjects(true, true))
+		{
+			if (Key.SubjectName.ToString().Equals(SubjectName, ESearchCase::IgnoreCase))
+			{
+				OutKey = Key;
+				return true;
+			}
+		}
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> SubjectJson(ILiveLinkClient* Client, const FLiveLinkSubjectKey& Key)
+	{
+		TSharedPtr<FJsonObject> Out = VmhJson::Obj();
+		Out->SetStringField(TEXT("subject"), Key.SubjectName.ToString());
+		Out->SetStringField(TEXT("source"), Key.Source.ToString());
+		const TSubclassOf<ULiveLinkRole> Role = Client->GetSubjectRole_AnyThread(Key);
+		Out->SetStringField(TEXT("role"), Role ? Role->GetName() : TEXT(""));
+		Out->SetStringField(TEXT("state"), SubjectStateName(Client->GetSubjectState(Key.SubjectName)));
+		Out->SetBoolField(TEXT("enabled"), Client->IsSubjectEnabled(Key, false));
+		if (const UObject* Settings = Client->GetSubjectSettings(Key))
+		{
+			Out->SetStringField(TEXT("settings_class"), Settings->GetClass()->GetName());
+			Out->SetStringField(TEXT("settings_object"), Settings->GetPathName());
+		}
+		return Out;
+	}
+
 	TSharedPtr<FJsonObject> VideoFormatJson(const FMetaHumanLiveLinkVideoFormat& Format, int32 Index)
 	{
 		TSharedPtr<FJsonObject> Out = VmhJson::Obj();
@@ -97,6 +140,62 @@ namespace
 		}
 		return Best != INDEX_NONE ? Best : (Formats.Num() > 0 ? 0 : INDEX_NONE);
 	}
+
+	UObject* GetSubjectSettingsObject(ILiveLinkClient* Client, const FString& SubjectName, FLiveLinkSubjectKey& OutKey, FString& OutError)
+	{
+		if (!FindSubjectKey(Client, SubjectName, OutKey))
+		{
+			OutError = FString::Printf(TEXT("No Live Link subject named '%s' (see list_subjects)"), *SubjectName);
+			return nullptr;
+		}
+		UObject* Settings = Client->GetSubjectSettings(OutKey);
+		if (!Settings)
+		{
+			OutError = FString::Printf(TEXT("Subject '%s' has no settings object"), *SubjectName);
+		}
+		return Settings;
+	}
+}
+
+// =====================================================================
+// Sources
+// =====================================================================
+
+FString UMetaHumanLiveLinkService::ListVideoDevices(bool bIncludeFormats)
+{
+	TArray<FMetaHumanLiveLinkVideoDevice> Devices;
+	UMetaHumanLocalLiveLinkSourceBlueprint::GetVideoDevices(Devices, true);
+	TArray<TSharedPtr<FJsonValue>> Items;
+	for (const FMetaHumanLiveLinkVideoDevice& D : Devices)
+	{
+		TSharedPtr<FJsonObject> Item = VmhJson::Obj();
+		Item->SetStringField(TEXT("name"), D.Name);
+		Item->SetStringField(TEXT("url"), D.Url);
+		Item->SetBoolField(TEXT("media_bundle"), D.IsMediaBundle);
+		if (bIncludeFormats)
+		{
+			TArray<FMetaHumanLiveLinkVideoTrack> Tracks;
+			bool bTimedOut = false;
+			UMetaHumanLocalLiveLinkSourceBlueprint::GetVideoTracks(D, Tracks, bTimedOut, 5.f);
+			TArray<TSharedPtr<FJsonValue>> FormatItems;
+			if (Tracks.Num() > 0)
+			{
+				TArray<FMetaHumanLiveLinkVideoFormat> Formats;
+				UMetaHumanLocalLiveLinkSourceBlueprint::GetVideoFormats(Tracks[0], Formats, bTimedOut, true, 5.f);
+				for (int32 i = 0; i < Formats.Num(); ++i)
+				{
+					FormatItems.Add(MakeShared<FJsonValueObject>(VideoFormatJson(Formats[i], i)));
+				}
+			}
+			Item->SetBoolField(TEXT("timed_out"), bTimedOut);
+			Item->SetArrayField(TEXT("formats"), FormatItems);
+		}
+		Items.Add(MakeShared<FJsonValueObject>(Item));
+	}
+	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
+	Out->SetNumberField(TEXT("count"), Devices.Num());
+	Out->SetArrayField(TEXT("devices"), Items);
+	return VmhJson::Ok(Out);
 }
 
 FString UMetaHumanLiveLinkService::AddVideoSource(const FString& DeviceName, const FString& SubjectName, int32 FormatIndex)
@@ -241,6 +340,25 @@ FString UMetaHumanLiveLinkService::ListSources()
 	return VmhJson::Ok(Out);
 }
 
+FString UMetaHumanLiveLinkService::ListSubjects()
+{
+	FString Error;
+	ILiveLinkClient* Client = GetClient(Error);
+	if (!Client)
+	{
+		return VmhJson::Error(TEXT("NO_LIVE_LINK"), Error);
+	}
+	TArray<TSharedPtr<FJsonValue>> Items;
+	for (const FLiveLinkSubjectKey& Key : Client->GetSubjects(true, true))
+	{
+		Items.Add(MakeShared<FJsonValueObject>(SubjectJson(Client, Key)));
+	}
+	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
+	Out->SetNumberField(TEXT("count"), Items.Num());
+	Out->SetArrayField(TEXT("subjects"), Items);
+	return VmhJson::Ok(Out);
+}
+
 FString UMetaHumanLiveLinkService::RemoveSource(const FString& SourceGuid)
 {
 	FString Error;
@@ -271,6 +389,44 @@ FString UMetaHumanLiveLinkService::RemoveSource(const FString& SourceGuid)
 	TSharedPtr<FJsonObject> Out = VmhJson::Obj();
 	Out->SetArrayField(TEXT("removed"), VmhJson::StringArray(Removed));
 	Out->SetNumberField(TEXT("remaining"), Client->GetSources().Num());
+	return VmhJson::Ok(Out);
+}
+
+// =====================================================================
+// Subject tuning
+// =====================================================================
+
+FString UMetaHumanLiveLinkService::SubjectSettings(const FString& SubjectName, const FString& JsonPatch)
+{
+	FString Error;
+	ILiveLinkClient* Client = GetClient(Error);
+	if (!Client)
+	{
+		return VmhJson::Error(TEXT("NO_LIVE_LINK"), Error);
+	}
+	FLiveLinkSubjectKey Key;
+	UObject* Settings = GetSubjectSettingsObject(Client, SubjectName, Key, Error);
+	if (!Settings)
+	{
+		return VmhJson::Error(TEXT("SUBJECT_NOT_FOUND"), Error);
+	}
+	TArray<FString> Changed;
+	if (!JsonPatch.TrimStartAndEnd().IsEmpty())
+	{
+		FString ParseError;
+		TSharedPtr<FJsonObject> Patch = VmhJson::Parse(JsonPatch, ParseError);
+		if (!Patch.IsValid())
+		{
+			return VmhJson::Error(TEXT("INVALID_JSON"), ParseError);
+		}
+		if (!VmhJson::PatchObject(Settings, Patch, Changed, Error))
+		{
+			return VmhJson::Error(TEXT("PATCH_FAILED"), Error);
+		}
+	}
+	TSharedPtr<FJsonObject> Out = SubjectJson(Client, Key);
+	Out->SetObjectField(TEXT("settings"), VmhJson::ObjectToJson(Settings, {}));
+	Out->SetArrayField(TEXT("changed"), VmhJson::StringArray(Changed));
 	return VmhJson::Ok(Out);
 }
 

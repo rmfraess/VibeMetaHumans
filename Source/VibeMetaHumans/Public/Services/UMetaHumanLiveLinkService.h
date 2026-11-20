@@ -68,4 +68,18 @@ public:
 	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|LiveLink")
 	static FString BindSubjectToActor(const FString& ActorLabel, const FString& SubjectName, bool bSwitchFaceToLiveLinkAnimBP = true);
 
+public:
+	// Restored from upstream: the native replacement does not do all of this (cut audit).
+	/** All Live Link subjects: name, source guid, role, state (Connected/Unresponsive/...), enabled, settings class. */
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Read"), Category = "VibeMetaHumans|LiveLink")
+	static FString ListSubjects();
+
+	/** Video capture devices (webcams, capture cards, media bundles) the MetaHuman Video source can use, with their formats. */
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Read"), Category = "VibeMetaHumans|LiveLink")
+	static FString ListVideoDevices(bool bIncludeFormats = true);
+
+	/** Read/patch a subject's settings object (smoothing, calibration alpha, mood for audio subjects...). Empty patch = read only. */
+	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|LiveLink")
+	static FString SubjectSettings(const FString& SubjectName, const FString& JsonPatch);
+
 };
