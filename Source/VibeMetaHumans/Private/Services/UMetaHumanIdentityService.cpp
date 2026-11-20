@@ -4,6 +4,7 @@
 
 #include "CaptureData.h"
 #include "DNACommon.h"
+#include "FileHelpers.h"
 #include "MetaHumanIdentity.h"
 #include "MetaHumanIdentityParts.h"
 #include "MetaHumanIdentityPose.h"
@@ -226,6 +227,11 @@ FString UMetaHumanIdentityService::CreateIdentityFromDna(const FString& PackageP
 	{
 		return VmhJson::Error(TEXT("FILE_NOT_FOUND"), FString::Printf(TEXT("No DNA file at %s"), *DnaFilePath));
 	}
+	// The engine import fails (NoDNA) without a brows file, after the asset already exists.
+	if (!FPaths::FileExists(BrowsJsonPath))
+	{
+		return VmhJson::Error(TEXT("FILE_NOT_FOUND"), FString::Printf(TEXT("No brows .json at '%s': the DNA import needs one (the archetype's is MetaHumanAnimator/Content/IdentityTemplate/Face_Archetype_Brows.json)"), *BrowsJsonPath));
+	}
 	FString Error;
 	UObject* Created = VmhAssets::Create(PackagePath, AssetName, UMetaHumanIdentity::StaticClass(), IdentityFactoryPath, Error);
 	UMetaHumanIdentity* Identity = Cast<UMetaHumanIdentity>(Created);
@@ -254,6 +260,12 @@ FString UMetaHumanIdentityService::CreateIdentityFromDna(const FString& PackageP
 	{
 		UE_LOG(LogVibeMetaHumans, Warning, TEXT("%s"), *SaveError);
 	}
+	// The import creates SK_<AssetName> meshes next to the identity; unsaved, its references dangle after a restart.
+	TArray<UPackage*> Generated;
+	FEditorFileUtils::GetDirtyContentPackages(Generated);
+	const FString Prefix = FPaths::Combine(PackagePath, TEXT("SK_") + AssetName);
+	Generated.RemoveAll([&Prefix](const UPackage* Package) { return !Package->GetName().StartsWith(Prefix); });
+	UEditorLoadingAndSavingUtils::SavePackages(Generated, /*bOnlyDirty*/ true);
 	return VmhJson::Ok(Out);
 }
 

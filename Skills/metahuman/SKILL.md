@@ -61,6 +61,11 @@ Identity and Object tools in the table above.
 
 ## Rules of thumb
 
+**Never delete, rename or unload a character while a texture-source request is in flight.** The
+download's completion callback dereferences the character and crashes the Editor. Use
+`request_texture_sources(path, True)` when you will touch the asset next, or wait until it reports
+`requesting_high_res_textures: false`.
+
 1. **One character at a time.** Native subsystem edits require an edit session: add the character
    with `try_add_object_to_edit`, and release it with `remove_object_to_edit` only if acquired.
    The MetaHumanGenerator toolset also provides session-based editing. Use deferred save and check status.

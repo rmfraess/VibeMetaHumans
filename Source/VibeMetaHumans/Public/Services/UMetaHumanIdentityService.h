@@ -39,7 +39,7 @@ public:
 	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Identity")
 	static FString CreateIdentityFromFootage(const FString& PackagePath, const FString& AssetName, const FString& CaptureDataPath, int32 NeutralFrame, int32 BodyTypeIndex = 1, bool bRequestAutoRig = true, bool bPrepareForPerformance = false);
 
-	/** Create an Identity from a .dna file (+ optional brows .json) and optionally prepare it for performance. */
+	/** Create an Identity from a .dna file and its brows .json (required by the engine import), save it with its generated meshes, and optionally prepare it for performance. */
 	UFUNCTION(BlueprintCallable, meta = (AICallable, AIAccessMode = "Write"), Category = "VibeMetaHumans|Identity")
 	static FString CreateIdentityFromDna(const FString& PackagePath, const FString& AssetName, const FString& DnaFilePath, const FString& BrowsJsonPath, bool bPrepareForPerformance = true);
 
